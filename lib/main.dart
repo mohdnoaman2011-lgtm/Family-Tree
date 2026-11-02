@@ -122,12 +122,12 @@ class AppState extends ChangeNotifier {
   String userName = 'المستخدم';
   int tab = 0;
   int _n = 0, _e = 0;
-  late Person root;
+  Person? _root;
+  String familyName = '';
+  Person get root => _root!;
+  bool get hasTree => _root != null;
+  String get treeTitle => familyName.isEmpty ? 'شجرة العائلة' : 'شجرة عائلة $familyName';
   SharedPreferences? _prefs;
-
-  AppState() {
-    _seed();
-  }
 
   Color get primary => accents[accent % accents.length];
 
@@ -137,29 +137,18 @@ class AppState extends ChangeNotifier {
     return p;
   }
 
-  void _seed() {
-    const fem = {
-      'التومه', 'ليلى', 'شامه', 'بتول', 'هويدا', 'هبه', 'هناء', 'ريم', 'رحاب',
-      'هبيات', 'هدى', 'هنادي', 'نعمات', 'نوال', 'عاطفه', 'احلام', 'الهام',
-      'بدريه', 'سلوى', 'غاده', 'هاله', 'نجلاء', 'لمياء',
-    };
-    root = _add('محمد حمد', null);
-    const data = {
-      'يوسف': ['نعمان', 'هويدا', 'نزار', 'نقيب', 'هبه', 'هناء', 'ريم', 'رحاب'],
-      'حمد': ['وضاح', 'فواز'],
-      'صلاح': ['سامر'],
-      'حسن': ['حاتم', 'حافظ', 'زاهر', 'ياسر', 'نجلاء', 'لمياء', 'محمد'],
-      'التومه': ['هبيات', 'خالد', 'هدى', 'طارق', 'بكري', 'هنادي'],
-      'ليلى': ['نعمات', 'عادل', 'نوال', 'عاطفه', 'احلام', 'الهام', 'احمد', 'محمد', 'موهيد'],
-      'شامه': ['فيصل', 'بدريه', 'سلوى', 'سيف', 'عصام', 'مجدى', 'عماد', 'عباس', 'ضياء الدين', 'غاده', 'هاله'],
-      'بتول': <String>[],
-    };
-    data.forEach((b, kids) {
-      final bp = _add(b, root.id, female: fem.contains(b));
-      for (final k in kids) {
-        _add(k, bp.id, female: fem.contains(k));
-      }
-    });
+  void createTree(String rootName, String family) {
+    people.clear();
+    events.clear();
+    _img.clear();
+    _imgLen.clear();
+    _n = 0;
+    _e = 0;
+    _root = _add(rootName, null);
+    familyName = family;
+    started = true;
+    tab = 0;
+    notifyListeners();
   }
 
   Person? byId(String id) {
@@ -251,9 +240,14 @@ class AppState extends ChangeNotifier {
   void reset() {
     people.clear();
     events.clear();
+    _img.clear();
+    _imgLen.clear();
+    _root = null;
+    familyName = '';
+    started = false;
+    tab = 0;
     _n = 0;
     _e = 0;
-    _seed();
     notifyListeners();
   }
 
@@ -288,14 +282,19 @@ class AppState extends ChangeNotifier {
         'people': [for (final p in people) p.toJson()],
         'events': [for (final e in events) e.toJson()],
         'started': started, 'themeMode': themeMode, 'accent': accent,
-        'textScale': textScale, 'userName': userName, 'n': _n, 'e': _e,
+        'textScale': textScale, 'userName': userName, 'familyName': familyName, 'n': _n, 'e': _e,
       };
 
   bool applyMap(Map<String, dynamic> j) {
     final ps = [for (final x in (j['people'] as List? ?? [])) Person.fromJson(x as Map<String, dynamic>)];
+    themeMode = j['themeMode'] as int? ?? themeMode;
+    accent = j['accent'] as int? ?? accent;
+    textScale = (j['textScale'] as num?)?.toDouble() ?? textScale;
+    userName = j['userName'] as String? ?? userName;
     if (ps.isEmpty || !ps.any((p) => p.parentId == null)) return false;
     people..clear()..addAll(ps);
-    root = people.firstWhere((p) => p.parentId == null);
+    _root = people.firstWhere((p) => p.parentId == null);
+    familyName = j['familyName'] as String? ?? '';
     events
       ..clear()
       ..addAll([for (final x in (j['events'] as List? ?? [])) Event.fromJson(x as Map<String, dynamic>)]);
@@ -711,7 +710,7 @@ class FamilyApp extends StatelessWidget {
             ),
           );
         },
-        home: app.started ? const Shell() : const StartScreen(),
+        home: (app.started && app.hasTree) ? const Shell() : const StartScreen(),
       ),
     );
   }
@@ -736,7 +735,52 @@ class _StartScreenState extends State<StartScreen> with SingleTickerProviderStat
 
   void _go() {
     HapticFeedback.mediumImpact();
-    app.update(() => app.started = true);
+    if (app.hasTree) {
+      app.update(() => app.started = true);
+    } else {
+      _create();
+    }
+  }
+
+  Future<void> _create() async {
+    if (app.hasTree) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('إنشاء شجرة جديدة؟'),
+          content: const Text('ستُستبدل الشجرة الحالية وتُحذف بياناتها.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('إلغاء')),
+            FilledButton(style: FilledButton.styleFrom(minimumSize: const Size(88, 44)), onPressed: () => Navigator.pop(c, true), child: const Text('متابعة')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    final name = TextEditingController();
+    final fam = TextEditingController();
+    await showSheet<void>(
+      context,
+      (c) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('إنشاء شجرة جديدة', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
+        const SizedBox(height: 6),
+        Text('ابدأ بجذر الشجرة، ثم أضف بقية الأفراد.', style: TextStyle(color: Theme.of(c).colorScheme.onSurfaceVariant)),
+        const SizedBox(height: 16),
+        TextField(controller: name, autofocus: true, decoration: deco(c, 'اسم جذر الشجرة (مثال: محمد أحمد)')),
+        const SizedBox(height: 12),
+        TextField(controller: fam, decoration: deco(c, 'اسم العائلة (مثال: أحمد)')),
+        const SizedBox(height: 20),
+        FilledButton(
+          onPressed: () {
+            if (name.text.trim().isEmpty) return;
+            final n = name.text.trim(), f = fam.text.trim();
+            Navigator.pop(c);
+            app.createTree(n, f);
+          },
+          child: const Text('إنشاء الشجرة'),
+        ),
+      ]),
+    );
   }
 
   @override
@@ -772,7 +816,7 @@ class _StartScreenState extends State<StartScreen> with SingleTickerProviderStat
               const SizedBox(height: 28),
               SizedBox(width: double.infinity, child: FilledButton(onPressed: _go, child: const Text('تسجيل الدخول'))),
               const SizedBox(height: 12),
-              SizedBox(width: double.infinity, child: OutlinedButton(onPressed: _go, child: const Text('إنشاء شجرة جديدة'))),
+              SizedBox(width: double.infinity, child: OutlinedButton(onPressed: _create, child: const Text('إنشاء شجرة جديدة'))),
             ]),
           ),
         ),
@@ -907,7 +951,7 @@ class HomeScreen extends StatelessWidget {
                     padding: const EdgeInsets.all(22),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       const Text('شجرتك', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                      const Text('شجرة عائلة حمد', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900)),
+                      Text(app.treeTitle, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900)),
                       const SizedBox(height: 18),
                       Row(children: [
                         _Stat(ar(app.people.length), 'فرد'),
@@ -940,6 +984,19 @@ class HomeScreen extends StatelessWidget {
               const SizedBox(width: 10),
               _Quick(Icons.diversity_3_rounded, 'صلة القرابة', () => openKinship(context)),
             ]),
+            if (recent.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: Surface(
+                  onTap: () => openAdd(context),
+                  child: Row(children: [
+                    Icon(Icons.person_add_alt_1_rounded, color: cs.primary),
+                    const SizedBox(width: 12),
+                    const Expanded(child: Text('شجرتك فارغة. ابدأ بإضافة أول فرد من العائلة.', style: TextStyle(fontWeight: FontWeight.w800, height: 1.5))),
+                  ]),
+                ),
+              )
+            else ...[
             const SectionTitle('أحدث الأفراد'),
             SizedBox(
               height: 98,
@@ -964,6 +1021,7 @@ class HomeScreen extends StatelessWidget {
                 },
               ),
             ),
+            ],
             SectionTitle('مناسبات قريبة',
                 trailing: TextButton.icon(onPressed: () => addEventSheet(context), icon: const Icon(Icons.add_rounded), label: const Text('إضافة'))),
             if (ups.isEmpty)
@@ -1111,6 +1169,12 @@ class TreeScreen extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (kids.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 28),
+                    child: Text('لم تُضف أفراداً بعد.\nاضغط "إضافة فرد" للبدء.',
+                        textAlign: TextAlign.center, style: TextStyle(height: 1.7, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                  ),
                 Padding(
                   padding: const EdgeInsetsDirectional.only(start: 34),
                   child: Column(children: [
@@ -1386,7 +1450,7 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
     final c = Canvas(rec)..scale(pr);
     c.drawRect(Rect.fromLTWH(0, 0, W, H), Paint()..color = Colors.white);
     final t1 = TextPainter(
-      text: const TextSpan(text: 'شجرة عائلة حمد', style: TextStyle(color: Color(0xFF14181A), fontSize: 32, fontWeight: FontWeight.w900)),
+      text: TextSpan(text: app.treeTitle, style: const TextStyle(color: Color(0xFF14181A), fontSize: 32, fontWeight: FontWeight.w900)),
       textDirection: TextDirection.rtl,
     )..layout();
     t1.paint(c, Offset((W - t1.width) / 2, 18));
@@ -2192,7 +2256,7 @@ class SettingsScreen extends StatelessWidget {
             const SectionTitle('الشجرة والبيانات'),
             _group(context, [
               _Tile(Icons.group_add_outlined, 'دعوة أفراد العائلة', 'نسخ نص الدعوة', () {
-                Clipboard.setData(const ClipboardData(text: 'انضم إلى شجرة عائلة حمد'));
+                Clipboard.setData(ClipboardData(text: 'انضم إلى ${app.treeTitle}'));
                 toast(context, 'تم نسخ نص الدعوة');
               }),
               _Tile(Icons.ios_share_rounded, 'تصدير الشجرة', 'نسخ الشجرة كنص مرتب', () {
@@ -2208,8 +2272,8 @@ class SettingsScreen extends StatelessWidget {
                 final ok = d?.text != null && app.restore(d!.text!);
                 if (context.mounted) toast(context, ok ? 'تمت استعادة البيانات' : 'لا توجد نسخة احتياطية صالحة في الحافظة');
               }),
-              _Tile(Icons.restart_alt_rounded, 'إعادة تعيين البيانات', 'العودة إلى البيانات الأولية', () async {
-                if (await _confirm(context, 'إعادة التعيين؟', 'ستُحذف تعديلاتك وتعود البيانات الأولية.')) app.reset();
+              _Tile(Icons.restart_alt_rounded, 'حذف كل البيانات', 'حذف الشجرة والبدء من جديد', () async {
+                if (await _confirm(context, 'حذف كل البيانات؟', 'ستُحذف الشجرة وكل الأفراد والمناسبات نهائياً.')) app.reset();
               }),
             ]),
             const SectionTitle('عام'),
