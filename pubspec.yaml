@@ -1,7 +1,7 @@
 name: family_tree
 description: تطبيق شجرة العائلة
 publish_to: "none"
-version: 2.0.0+2
+version: 2.1.0+3
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -12,6 +12,8 @@ dependencies:
   shared_preferences: ^2.2.0
   image_picker: ^1.0.7
   google_fonts: ^6.2.1
+  pdf: ^3.11.0
+  printing: ^5.13.0
 
 flutter:
   uses-material-design: true
