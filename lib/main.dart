@@ -1,10 +1,14 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const double kNavPad = 112;
@@ -1243,35 +1247,77 @@ class _ElbowPainter extends CustomPainter {
 // ═════════════════════════ الشجرة الكاملة ═════════════════════════
 
 class TreeLayout {
-  static const double rowH = 46, colW = 156, pillW = 128, pillH = 38, margin = 28;
-  final Map<String, Offset> pos = {};
-  double nextY = 0;
-  int maxDepth = 0;
+  static const double rowH = 42, colW = 150, pillW = 120, pillH = 34, margin = 28, rootW = 150, rootH = 46;
+  final Map<String, Offset> pos = {}; // x = عمق الفرع، y = أعلى الصف
+  final Map<String, int> side = {}; // +1 يمين، -1 يسار
+  double _next = 0;
+  int maxDepth = 1;
+  double bodyH = rowH;
 
   TreeLayout() {
-    _place(app.root, 0);
+    final kids = app.children(app.root.id);
+    int leaves(Person p) {
+      final k = app.children(p.id);
+      return k.isEmpty ? 1 : k.fold<int>(0, (a, c) => a + leaves(c));
+    }
+
+    final total = kids.fold<int>(0, (a, k) => a + leaves(k));
+    var acc = 0, split = kids.length, best = 1 << 30;
+    for (var i = 0; i <= kids.length; i++) {
+      final d = (total - 2 * acc).abs();
+      if (d < best) {
+        best = d;
+        split = i;
+      }
+      if (i < kids.length) acc += leaves(kids[i]);
+    }
+    final right = kids.sublist(0, split), left = kids.sublist(split);
+    final hr = _layoutSide(right, 1), hl = _layoutSide(left, -1);
+    bodyH = math.max(math.max(hr, hl), rowH);
+    _shift(1, (bodyH - hr) / 2);
+    _shift(-1, (bodyH - hl) / 2);
+    pos[app.root.id] = Offset(0, (bodyH - rowH) / 2);
+    side[app.root.id] = 0;
   }
 
-  double _place(Person p, int depth) {
+  double _layoutSide(List<Person> list, int sign) {
+    _next = 0;
+    for (final k in list) {
+      _place(k, 1, sign);
+    }
+    return _next;
+  }
+
+  void _shift(int sign, double dy) {
+    for (final e in side.entries) {
+      if (e.value == sign) pos[e.key] = pos[e.key]! + Offset(0, dy);
+    }
+  }
+
+  double _place(Person p, int depth, int sign) {
     maxDepth = math.max(maxDepth, depth);
+    side[p.id] = sign;
     final kids = app.children(p.id);
     double y;
     if (kids.isEmpty) {
-      y = nextY;
-      nextY += rowH;
+      y = _next;
+      _next += rowH;
     } else {
-      final ys = [for (final k in kids) _place(k, depth + 1)];
+      final ys = [for (final k in kids) _place(k, depth + 1, sign)];
       y = (ys.first + ys.last) / 2;
     }
-    pos[p.id] = Offset(depth.toDouble(), y);
+    pos[p.id] = Offset(depth * sign.toDouble(), y);
     return y;
   }
 
-  Size get size => Size(margin * 2 + pillW + maxDepth * colW, margin * 2 + nextY);
+  double get halfW => maxDepth * colW + pillW / 2 + margin;
+  Size get size => Size(halfW * 2, margin * 2 + bodyH);
 
   Rect rect(Person p) {
     final o = pos[p.id]!;
-    return Rect.fromLTWH(size.width - margin - pillW - o.dx * colW, margin + o.dy + (rowH - pillH) / 2, pillW, pillH);
+    final cy = margin + o.dy + rowH / 2;
+    if (p.parentId == null) return Rect.fromCenter(center: Offset(halfW, cy), width: rootW, height: rootH);
+    return Rect.fromCenter(center: Offset(halfW + o.dx * colW, cy), width: pillW, height: pillH);
   }
 }
 
@@ -1299,8 +1345,13 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
 
   void _reset() {
     if (!mounted) return;
-    final w = MediaQuery.of(context).size.width;
-    tc.value = Matrix4.translationValues(w - layout.size.width, 60, 0);
+    final s = MediaQuery.of(context).size;
+    final sc = math.max(.55, math.min(1.0, s.width / layout.size.width));
+    final tx = s.width / 2 - layout.halfW * sc;
+    final ty = math.max(90.0, (s.height - layout.size.height * sc) / 2);
+    tc.value = Matrix4.identity()
+      ..translate(tx, ty)
+      ..scale(sc, sc, 1.0);
   }
 
   void _zoom(double f) {
@@ -1326,12 +1377,72 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
     }
   }
 
+  Future<Uint8List> _buildPdf() async {
+    final L = layout;
+    const titleH = 96.0;
+    final W = L.size.width, H = L.size.height + titleH;
+    final pr = (4096 / math.max(W, H)).clamp(1.0, 3.0).toDouble();
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec)..scale(pr);
+    c.drawRect(Rect.fromLTWH(0, 0, W, H), Paint()..color = Colors.white);
+    final t1 = TextPainter(
+      text: const TextSpan(text: 'شجرة عائلة حمد', style: TextStyle(color: Color(0xFF14181A), fontSize: 32, fontWeight: FontWeight.w900)),
+      textDirection: TextDirection.rtl,
+    )..layout();
+    t1.paint(c, Offset((W - t1.width) / 2, 18));
+    final t2 = TextPainter(
+      text: TextSpan(text: '${ar(app.people.length)} فرداً · ${fmtDate(DateTime.now())}', style: const TextStyle(color: Color(0xFF5B6168), fontSize: 15)),
+      textDirection: TextDirection.rtl,
+    )..layout();
+    t2.paint(c, Offset((W - t2.width) / 2, 62));
+    c.save();
+    c.translate(0, titleH);
+    _TreePainter(L, Colors.white, const Color(0xFF14181A), const Color(0xFFD5D9D2), dots: false).paint(c, L.size);
+    c.restore();
+    final img = await rec.endRecording().toImage((W * pr).round(), (H * pr).round());
+    final bd = await img.toByteData(format: ui.ImageByteFormat.png);
+    final image = pw.MemoryImage(bd!.buffer.asUint8List());
+    final doc = pw.Document();
+    doc.addPage(pw.Page(
+      pageFormat: PdfPageFormat(W, H),
+      build: (_) => pw.Image(image, width: W, height: H, fit: pw.BoxFit.fill),
+    ));
+    return doc.save();
+  }
+
+  Future<void> _pdf(bool share) async {
+    toast(context, 'جارٍ تجهيز ملف PDF…');
+    try {
+      final bytes = await _buildPdf();
+      if (share) {
+        await Printing.sharePdf(bytes: bytes, filename: 'family-tree.pdf');
+      } else {
+        await Printing.layoutPdf(onLayout: (_) async => bytes, name: 'family-tree.pdf');
+      }
+    } catch (e) {
+      if (mounted) toast(context, 'تعذر إنشاء ملف PDF');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: AppBar(title: const Text('الشجرة الكاملة')),
+      appBar: AppBar(
+        title: const Text('الشجرة الكاملة'),
+        actions: [
+          PopupMenuButton<bool>(
+            tooltip: 'حفظ PDF',
+            icon: const Icon(Icons.picture_as_pdf_rounded),
+            onSelected: _pdf,
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: false, child: Text('حفظ / طباعة كـ PDF')),
+              PopupMenuItem(value: true, child: Text('مشاركة ملف PDF')),
+            ],
+          ),
+        ],
+      ),
       body: InteractiveViewer(
         transformationController: tc,
         constrained: false,
@@ -1357,21 +1468,26 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
 class _TreePainter extends CustomPainter {
   final TreeLayout L;
   final Color fill, text, dot;
-  _TreePainter(this.L, this.fill, this.text, this.dot);
+  final bool dots;
+  _TreePainter(this.L, this.fill, this.text, this.dot, {this.dots = true});
 
   @override
   void paint(Canvas canvas, Size s) {
-    final dp = Paint()..color = dot.withAlpha(110);
-    for (double x = 16; x < s.width; x += 32) {
-      for (double y = 16; y < s.height; y += 32) {
-        canvas.drawCircle(Offset(x, y), 1.2, dp);
+    if (dots) {
+      final dp = Paint()..color = dot.withAlpha(110);
+      for (double x = 16; x < s.width; x += 32) {
+        for (double y = 16; y < s.height; y += 32) {
+          canvas.drawCircle(Offset(x, y), 1.2, dp);
+        }
       }
     }
     for (final p in app.people) {
       if (p.parentId == null) continue;
       final a = L.rect(app.byId(p.parentId!)!);
       final b = L.rect(p);
-      final from = Offset(a.left, a.center.dy), to = Offset(b.right, b.center.dy);
+      final right = L.side[p.id]! > 0;
+      final from = right ? Offset(a.right, a.center.dy) : Offset(a.left, a.center.dy);
+      final to = right ? Offset(b.left, b.center.dy) : Offset(b.right, b.center.dy);
       final mx = (from.dx + to.dx) / 2;
       canvas.drawPath(
         Path()..moveTo(from.dx, from.dy)..cubicTo(mx, from.dy, mx, to.dy, to.dx, to.dy),
@@ -1380,20 +1496,22 @@ class _TreePainter extends CustomPainter {
     }
     for (final p in app.people) {
       final r = L.rect(p);
+      final isRoot = p.parentId == null;
       final rr = RRect.fromRectAndRadius(r, Radius.circular(r.height / 2));
       final c = app.colorOf(p);
       canvas.drawShadow(Path()..addRRect(rr), Colors.black, 3, false);
-      canvas.drawRRect(rr, Paint()..color = fill);
+      canvas.drawRRect(rr, Paint()..color = isRoot ? c : fill);
       canvas.drawRRect(rr, Paint()..color = c..style = PaintingStyle.stroke..strokeWidth = 2.2);
+      final fg = isRoot ? Colors.white : text;
       final cc = Offset(r.right - r.height / 2, r.center.dy);
-      canvas.drawCircle(cc, r.height / 2 - 5, Paint()..color = Color.alphaBlend(c.withAlpha(70), fill));
+      canvas.drawCircle(cc, r.height / 2 - 5, Paint()..color = isRoot ? Colors.white.withAlpha(60) : Color.alphaBlend(c.withAlpha(70), fill));
       final ini = TextPainter(
-        text: TextSpan(text: p.name.substring(0, 1), style: TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w900)),
+        text: TextSpan(text: p.name.substring(0, 1), style: TextStyle(color: fg, fontSize: 13, fontWeight: FontWeight.w900)),
         textDirection: TextDirection.rtl,
       )..layout();
       ini.paint(canvas, cc - Offset(ini.width / 2, ini.height / 2));
       final tp = TextPainter(
-        text: TextSpan(text: p.name, style: TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w800)),
+        text: TextSpan(text: p.name, style: TextStyle(color: fg, fontSize: isRoot ? 15 : 13, fontWeight: FontWeight.w800)),
         textDirection: TextDirection.rtl,
         maxLines: 1,
         ellipsis: '…',
