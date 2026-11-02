@@ -237,6 +237,37 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _applyOrder(String parentId, List<Person> ordered) {
+    final slots = <int>[for (var i = 0; i < people.length; i++) if (people[i].parentId == parentId) i];
+    for (var i = 0; i < slots.length; i++) {
+      people[slots[i]] = ordered[i];
+    }
+    notifyListeners();
+  }
+
+  void reorderChildren(String parentId, int oldIndex, int newIndex) {
+    final kids = children(parentId);
+    if (newIndex > oldIndex) newIndex -= 1;
+    if (oldIndex == newIndex) return;
+    kids.insert(newIndex, kids.removeAt(oldIndex));
+    _applyOrder(parentId, kids);
+  }
+
+  /// mode 0: الاسم، mode 1: الأكبر سناً (تاريخ الميلاد)
+  void sortChildren(String parentId, int mode) {
+    final kids = children(parentId);
+    kids.sort((a, b) {
+      if (mode == 1) {
+        final da = parseDate(a.birth), db = parseDate(b.birth);
+        if (da != null && db != null) return da.compareTo(db);
+        if (da != null) return -1;
+        if (db != null) return 1;
+      }
+      return a.name.compareTo(b.name);
+    });
+    _applyOrder(parentId, kids);
+  }
+
   void reset() {
     people.clear();
     events.clear();
@@ -1310,22 +1341,25 @@ class _ElbowPainter extends CustomPainter {
 
 // ═════════════════════════ الشجرة الكاملة ═════════════════════════
 
+int fullLeaves(Person p) {
+  final k = app.children(p.id);
+  return k.isEmpty ? 1 : k.fold<int>(0, (a, c) => a + fullLeaves(c));
+}
+
 class TreeLayout {
-  static const double rowH = 42, colW = 150, pillW = 120, pillH = 34, margin = 28, rootW = 150, rootH = 46;
+  static const double rowH = 50, colW = 175, pillW = 130, pillH = 36, margin = 36, rootW = 160, rootH = 50;
+  final Set<String> expanded;
+  final bool all;
   final Map<String, Offset> pos = {}; // x = عمق الفرع، y = أعلى الصف
   final Map<String, int> side = {}; // +1 يمين، -1 يسار
   double _next = 0;
   int maxDepth = 1;
   double bodyH = rowH;
 
-  TreeLayout() {
+  TreeLayout(this.expanded, {this.all = false}) {
     final kids = app.children(app.root.id);
-    int leaves(Person p) {
-      final k = app.children(p.id);
-      return k.isEmpty ? 1 : k.fold<int>(0, (a, c) => a + leaves(c));
-    }
-
-    final total = kids.fold<int>(0, (a, k) => a + leaves(k));
+    // التقسيم يعتمد على العدد الكامل للأفراد ليبقى ثابتاً عند الطي والتوسيع
+    final total = kids.fold<int>(0, (a, k) => a + fullLeaves(k));
     var acc = 0, split = kids.length, best = 1 << 30;
     for (var i = 0; i <= kids.length; i++) {
       final d = (total - 2 * acc).abs();
@@ -1333,7 +1367,7 @@ class TreeLayout {
         best = d;
         split = i;
       }
-      if (i < kids.length) acc += leaves(kids[i]);
+      if (i < kids.length) acc += fullLeaves(kids[i]);
     }
     final right = kids.sublist(0, split), left = kids.sublist(split);
     final hr = _layoutSide(right, 1), hl = _layoutSide(left, -1);
@@ -1343,6 +1377,9 @@ class TreeLayout {
     pos[app.root.id] = Offset(0, (bodyH - rowH) / 2);
     side[app.root.id] = 0;
   }
+
+  bool isOpen(Person p) => all || p.parentId == null || expanded.contains(p.id);
+  bool visible(Person p) => pos.containsKey(p.id);
 
   double _layoutSide(List<Person> list, int sign) {
     _next = 0;
@@ -1361,7 +1398,7 @@ class TreeLayout {
   double _place(Person p, int depth, int sign) {
     maxDepth = math.max(maxDepth, depth);
     side[p.id] = sign;
-    final kids = app.children(p.id);
+    final kids = isOpen(p) ? app.children(p.id) : <Person>[];
     double y;
     if (kids.isEmpty) {
       y = _next;
@@ -1393,7 +1430,10 @@ class FullTreeScreen extends StatefulWidget {
 
 class _FullTreeScreenState extends State<FullTreeScreen> {
   final tc = TransformationController();
-  late final TreeLayout layout = TreeLayout();
+  late Set<String> expanded = _defaultExpanded();
+  late TreeLayout layout = TreeLayout(expanded);
+
+  Set<String> _defaultExpanded() => {for (final b in app.children(app.root.id)) b.id};
 
   @override
   void initState() {
@@ -1410,13 +1450,29 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
   void _reset() {
     if (!mounted) return;
     final s = MediaQuery.of(context).size;
-    final sc = math.max(.55, math.min(1.0, s.width / layout.size.width));
+    final sc = math.max(.6, math.min(1.0, s.width / layout.size.width));
     final tx = s.width / 2 - layout.halfW * sc;
-    final ty = math.max(90.0, (s.height - layout.size.height * sc) / 2);
+    final ty = math.max(100.0, (s.height - layout.size.height * sc) / 2);
     tc.value = Matrix4.identity()
       ..translate(tx, ty)
       ..scale(sc, sc, 1.0);
   }
+
+  // يغيّر الطي/التوسيع مع إبقاء الجذر في نفس مكانه على الشاشة
+  void _relayout(void Function() change) {
+    final m = tc.value;
+    final p0 = MatrixUtils.transformPoint(m, layout.rect(app.root).center);
+    setState(() {
+      change();
+      layout = TreeLayout(expanded);
+    });
+    final p1 = MatrixUtils.transformPoint(m, layout.rect(app.root).center);
+    tc.value = Matrix4.translationValues(p0.dx - p1.dx, p0.dy - p1.dy, 0).multiplied(m);
+  }
+
+  void _toggle(Person p) => _relayout(() {
+        if (!expanded.remove(p.id)) expanded.add(p.id);
+      });
 
   void _zoom(double f) {
     final s = MediaQuery.of(context).size;
@@ -1427,22 +1483,30 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
       ..translate(-cx, -cy);
     final next = m.multiplied(tc.value);
     final sc = next.getMaxScaleOnAxis();
-    if (sc < .25 || sc > 3) return;
+    if (sc < .2 || sc > 3) return;
     tc.value = next;
   }
 
-  void _tap(Offset o) {
+  Person? _hit(Offset o) {
     for (final p in app.people) {
-      if (layout.rect(p).inflate(4).contains(o)) {
-        HapticFeedback.selectionClick();
-        openPerson(context, p);
-        return;
-      }
+      if (layout.visible(p) && layout.rect(p).inflate(4).contains(o)) return p;
+    }
+    return null;
+  }
+
+  void _tap(Offset o) {
+    final p = _hit(o);
+    if (p == null) return;
+    HapticFeedback.selectionClick();
+    if (p.parentId != null && app.children(p.id).isNotEmpty) {
+      _toggle(p);
+    } else {
+      openPerson(context, p);
     }
   }
 
   Future<Uint8List> _buildPdf() async {
-    final L = layout;
+    final L = TreeLayout(const {}, all: true);
     const titleH = 96.0;
     final W = L.size.width, H = L.size.height + titleH;
     final pr = (4096 / math.max(W, H)).clamp(1.0, 3.0).toDouble();
@@ -1491,11 +1555,22 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final top = MediaQuery.of(context).padding.top + kToolbarHeight;
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('الشجرة الكاملة'),
         actions: [
+          IconButton(
+            tooltip: 'توسيع الكل',
+            icon: const Icon(Icons.unfold_more_rounded),
+            onPressed: () => _relayout(() => expanded = {for (final p in app.people) if (app.children(p.id).isNotEmpty) p.id}),
+          ),
+          IconButton(
+            tooltip: 'طي الفروع',
+            icon: const Icon(Icons.unfold_less_rounded),
+            onPressed: () => _relayout(() => expanded = _defaultExpanded()),
+          ),
           PopupMenuButton<bool>(
             tooltip: 'حفظ PDF',
             icon: const Icon(Icons.picture_as_pdf_rounded),
@@ -1507,17 +1582,41 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
           ),
         ],
       ),
-      body: InteractiveViewer(
-        transformationController: tc,
-        constrained: false,
-        minScale: .25,
-        maxScale: 3,
-        boundaryMargin: const EdgeInsets.all(500),
-        child: GestureDetector(
-          onTapUp: (d) => _tap(d.localPosition),
-          child: CustomPaint(size: layout.size, painter: _TreePainter(layout, cs.surface, cs.onSurface, cs.outlineVariant)),
+      body: Stack(children: [
+        InteractiveViewer(
+          transformationController: tc,
+          constrained: false,
+          minScale: .2,
+          maxScale: 3,
+          boundaryMargin: const EdgeInsets.all(600),
+          child: GestureDetector(
+            onTapUp: (d) => _tap(d.localPosition),
+            onLongPressStart: (d) {
+              final p = _hit(d.localPosition);
+              if (p != null) {
+                HapticFeedback.mediumImpact();
+                openPerson(context, p);
+              }
+            },
+            child: CustomPaint(size: layout.size, painter: _TreePainter(layout, cs.surface, cs.onSurface, cs.outlineVariant)),
+          ),
         ),
-      ),
+        Positioned(
+          top: top + 4,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(color: cs.surfaceContainerHigh.withAlpha(230), borderRadius: BorderRadius.circular(20)),
+                child: Text('اضغط على الفرع لفتحه أو طيّه · اضغط مطولاً لفتح البطاقة',
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+              ),
+            ),
+          ),
+        ),
+      ]),
       floatingActionButton: Column(mainAxisSize: MainAxisSize.min, children: [
         FloatingActionButton.small(heroTag: 'z+', tooltip: 'تكبير', onPressed: () => _zoom(1.25), child: const Icon(Icons.add_rounded)),
         const SizedBox(height: 8),
@@ -1539,13 +1638,14 @@ class _TreePainter extends CustomPainter {
   void paint(Canvas canvas, Size s) {
     if (dots) {
       final dp = Paint()..color = dot.withAlpha(110);
-      for (double x = 16; x < s.width; x += 32) {
-        for (double y = 16; y < s.height; y += 32) {
-          canvas.drawCircle(Offset(x, y), 1.2, dp);
+      for (double x = 20; x < s.width; x += 40) {
+        for (double y = 20; y < s.height; y += 40) {
+          canvas.drawCircle(Offset(x, y), 1.3, dp);
         }
       }
     }
-    for (final p in app.people) {
+    final vis = [for (final p in app.people) if (L.visible(p)) p];
+    for (final p in vis) {
       if (p.parentId == null) continue;
       final a = L.rect(app.byId(p.parentId!)!);
       final b = L.rect(p);
@@ -1555,10 +1655,10 @@ class _TreePainter extends CustomPainter {
       final mx = (from.dx + to.dx) / 2;
       canvas.drawPath(
         Path()..moveTo(from.dx, from.dy)..cubicTo(mx, from.dy, mx, to.dy, to.dx, to.dy),
-        Paint()..color = app.colorOf(p)..style = PaintingStyle.stroke..strokeWidth = 2.5..strokeCap = StrokeCap.round,
+        Paint()..color = app.colorOf(p)..style = PaintingStyle.stroke..strokeWidth = 2.6..strokeCap = StrokeCap.round,
       );
     }
-    for (final p in app.people) {
+    for (final p in vis) {
       final r = L.rect(p);
       final isRoot = p.parentId == null;
       final rr = RRect.fromRectAndRadius(r, Radius.circular(r.height / 2));
@@ -1570,17 +1670,31 @@ class _TreePainter extends CustomPainter {
       final cc = Offset(r.right - r.height / 2, r.center.dy);
       canvas.drawCircle(cc, r.height / 2 - 5, Paint()..color = isRoot ? Colors.white.withAlpha(60) : Color.alphaBlend(c.withAlpha(70), fill));
       final ini = TextPainter(
-        text: TextSpan(text: p.name.substring(0, 1), style: TextStyle(color: fg, fontSize: 13, fontWeight: FontWeight.w900)),
+        text: TextSpan(text: p.name.substring(0, 1), style: TextStyle(color: fg, fontSize: 14, fontWeight: FontWeight.w900)),
         textDirection: TextDirection.rtl,
       )..layout();
       ini.paint(canvas, cc - Offset(ini.width / 2, ini.height / 2));
       final tp = TextPainter(
-        text: TextSpan(text: p.name, style: TextStyle(color: fg, fontSize: isRoot ? 15 : 13, fontWeight: FontWeight.w800)),
+        text: TextSpan(text: p.name, style: TextStyle(color: fg, fontSize: isRoot ? 16 : 14, fontWeight: FontWeight.w800)),
         textDirection: TextDirection.rtl,
         maxLines: 1,
         ellipsis: '…',
       )..layout(maxWidth: r.width - r.height - 6);
       tp.paint(canvas, Offset(r.right - r.height - tp.width, r.center.dy - tp.height / 2));
+
+      // شارة الطي/التوسيع على الحافة الخارجية للفرع
+      final n = app.children(p.id).length;
+      if (!isRoot && n > 0 && !L.all) {
+        final open = L.isOpen(p);
+        final bc = Offset(L.side[p.id]! > 0 ? r.right + 2 : r.left - 2, r.center.dy);
+        canvas.drawCircle(bc, 12, Paint()..color = open ? Colors.white : c);
+        canvas.drawCircle(bc, 12, Paint()..color = c..style = PaintingStyle.stroke..strokeWidth = 2);
+        final bt = TextPainter(
+          text: TextSpan(text: open ? '−' : '+${ar(n)}', style: TextStyle(color: open ? c : onColor(c), fontSize: open ? 16 : 10, fontWeight: FontWeight.w900)),
+          textDirection: TextDirection.rtl,
+        )..layout();
+        bt.paint(canvas, bc - Offset(bt.width / 2, bt.height / 2));
+      }
     }
   }
 
@@ -1677,25 +1791,68 @@ class PersonScreen extends StatelessWidget {
                       _InfoRow(Icons.favorite_border_rounded, 'الزوج / الزوجة', p.spouse, () => editPersonSheet(context, p)),
                     ]),
                   ),
-                  SectionTitle('الأبناء'),
+                  SectionTitle(
+                    'الأبناء',
+                    trailing: kids.length > 1
+                        ? PopupMenuButton<int>(
+                            tooltip: 'ترتيب تلقائي',
+                            icon: const Icon(Icons.sort_rounded),
+                            onSelected: (m) => app.sortChildren(p.id, m),
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(value: 0, child: Text('ترتيب حسب الاسم')),
+                              PopupMenuItem(value: 1, child: Text('الأكبر سناً أولاً (تاريخ الميلاد)')),
+                            ],
+                          )
+                        : null,
+                  ),
+                  if (kids.length > 1)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10, right: 4),
+                      child: Text('اسحب المقبض لتغيير ترتيب الأبناء', style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+                    ),
                   if (kids.isEmpty)
                     Surface(child: Text('لا يوجد أبناء مسجلون بعد', style: TextStyle(color: cs.onSurfaceVariant))),
-                  for (final k in kids)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Surface(
-                        radius: 20,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        onTap: () => openPerson(context, k),
-                        child: Row(children: [
-                          Avatar(k, size: 42),
-                          const SizedBox(width: 12),
-                          Expanded(child: Text(k.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800))),
-                          Text(k.female ? 'ابنة' : 'ابن', style: TextStyle(color: cs.onSurfaceVariant)),
-                          Icon(Icons.chevron_left_rounded, color: cs.onSurfaceVariant),
-                        ]),
+                  ReorderableListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    buildDefaultDragHandles: false,
+                    itemCount: kids.length,
+                    onReorderStart: (_) => HapticFeedback.mediumImpact(),
+                    onReorder: (o, n) => app.reorderChildren(p.id, o, n),
+                    proxyDecorator: (child, i, anim) => AnimatedBuilder(
+                      animation: anim,
+                      builder: (c, w) => Transform.scale(
+                        scale: 1 + .03 * Curves.easeOut.transform(anim.value),
+                        child: Material(color: Colors.transparent, child: w),
                       ),
+                      child: child,
                     ),
+                    itemBuilder: (context, i) {
+                      final k = kids[i];
+                      return Padding(
+                        key: ValueKey(k.id),
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Surface(
+                          radius: 20,
+                          padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+                          onTap: () => openPerson(context, k),
+                          child: Row(children: [
+                            Avatar(k, size: 42),
+                            const SizedBox(width: 12),
+                            Expanded(child: Text(k.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800))),
+                            Text(k.female ? 'ابنة' : 'ابن', style: TextStyle(color: cs.onSurfaceVariant)),
+                            ReorderableDragStartListener(
+                              index: i,
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Icon(Icons.drag_indicator_rounded, color: cs.onSurfaceVariant),
+                              ),
+                            ),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
                   const SizedBox(height: 14),
                   Row(children: [
                     Expanded(
