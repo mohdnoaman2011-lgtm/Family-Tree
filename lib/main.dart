@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -2315,6 +2317,36 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _backup(BuildContext context) async {
+    try {
+      final d = DateTime.now();
+      final name = 'family-tree-${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}.json';
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'حفظ النسخة الاحتياطية',
+        fileName: name,
+        bytes: Uint8List.fromList(utf8.encode(app.exportJson())),
+      );
+      if (context.mounted) toast(context, path == null ? 'لم يتم حفظ الملف' : 'تم حفظ النسخة الاحتياطية في هاتفك');
+    } catch (_) {
+      if (context.mounted) toast(context, 'تعذر حفظ الملف');
+    }
+  }
+
+  Future<void> _restore(BuildContext context) async {
+    try {
+      final res = await FilePicker.platform.pickFiles(type: FileType.any, withData: true);
+      if (res == null || res.files.isEmpty) return;
+      final f = res.files.single;
+      final bytes = f.bytes ?? await File(f.path!).readAsBytes();
+      if (!context.mounted) return;
+      if (!await _confirm(context, 'استعادة النسخة؟', 'ستُستبدل بيانات التطبيق الحالية ببيانات الملف.')) return;
+      final ok = app.restore(utf8.decode(bytes));
+      if (context.mounted) toast(context, ok ? 'تمت استعادة البيانات' : 'الملف غير صالح كنسخة احتياطية');
+    } catch (_) {
+      if (context.mounted) toast(context, 'تعذر قراءة الملف');
+    }
+  }
+
   Future<bool> _confirm(BuildContext context, String title, String body) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -2416,19 +2448,8 @@ class SettingsScreen extends StatelessWidget {
                 Clipboard.setData(ClipboardData(text: 'انضم إلى ${app.treeTitle}'));
                 toast(context, 'تم نسخ نص الدعوة');
               }),
-              _Tile(Icons.ios_share_rounded, 'تصدير الشجرة', 'نسخ الشجرة كنص مرتب', () {
-                Clipboard.setData(ClipboardData(text: app.exportText()));
-                toast(context, 'تم نسخ الشجرة كنص');
-              }),
-              _Tile(Icons.cloud_upload_outlined, 'نسخة احتياطية', 'نسخ كل بياناتك إلى الحافظة', () {
-                Clipboard.setData(ClipboardData(text: app.exportJson()));
-                toast(context, 'تم نسخ النسخة الاحتياطية. احفظها في مكان آمن');
-              }),
-              _Tile(Icons.cloud_download_outlined, 'استعادة نسخة', 'من الحافظة', () async {
-                final d = await Clipboard.getData(Clipboard.kTextPlain);
-                final ok = d?.text != null && app.restore(d!.text!);
-                if (context.mounted) toast(context, ok ? 'تمت استعادة البيانات' : 'لا توجد نسخة احتياطية صالحة في الحافظة');
-              }),
+              _Tile(Icons.cloud_upload_outlined, 'نسخة احتياطية', 'حفظ ملف النسخة في هاتفك', () => _backup(context)),
+              _Tile(Icons.cloud_download_outlined, 'استعادة نسخة', 'اختيار ملف النسخة من هاتفك', () => _restore(context)),
               _Tile(Icons.restart_alt_rounded, 'حذف كل البيانات', 'حذف الشجرة والبدء من جديد', () async {
                 if (await _confirm(context, 'حذف كل البيانات؟', 'ستُحذف الشجرة وكل الأفراد والمناسبات نهائياً.')) app.reset();
               }),
