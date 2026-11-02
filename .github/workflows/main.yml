@@ -28,6 +28,9 @@ jobs:
           flutter create --platforms=android --project-name family_tree .
           cp /tmp/main.dart lib/main.dart
           rm -rf test
+          # إذن الإنترنت (لتحميل الخط) واسم التطبيق بالعربية
+          sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+          sed -i 's#android:label="[^"]*"#android:label="شجرة العائلة"#' android/app/src/main/AndroidManifest.xml
 
       - name: Get packages
         run: flutter pub get
