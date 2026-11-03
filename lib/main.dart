@@ -1927,6 +1927,257 @@ class _CardPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter old) => true;
 }
 
+// ═════════════════════════ PDF هرمي مرتب ═════════════════════════
+// صفحة للنظرة العامة (الجذر + الفروع + أبناؤهم) ثم صفحة لكل فرع له أحفاد.
+// كل صفحة تُملأ بالشجرة بحجم مناسب (A4 ثم A3 ثم A2 حسب الحاجة).
+
+class _PBox {
+  final Person p;
+  final List<_PBox> kids = [];
+  bool hang = false; // الأبناء الأخيرون يُعرضون معلّقين تحت أبيهم
+  double w = 0, h = 0, cx = 0, cy = 0;
+  _PBox(this.p);
+}
+
+class _PdfTree {
+  static const double cardW = 132, cardH = 138, gapX = 26, gapY = 64;
+  static const double pillW = 128, pillH = 38, pillGap = 8, hangGap = 20, hangIndent = 22, trunkX = 10;
+  late final _PBox root;
+  double bw = 0, bh = 0;
+
+  _PdfTree(Person top, {int? limit}) {
+    root = _build(top, 0, limit);
+    _measure(root);
+    _place(root, 0, 0);
+    bw = root.w;
+    bh = root.h;
+  }
+
+  _PBox _build(Person p, int d, int? limit) {
+    final b = _PBox(p);
+    if (limit == null || d < limit) {
+      for (final k in app.children(p.id)) {
+        b.kids.add(_build(k, d + 1, limit));
+      }
+    }
+    b.hang = d > 0 && b.kids.isNotEmpty && b.kids.every((k) => k.kids.isEmpty);
+    return b;
+  }
+
+  void _measure(_PBox b) {
+    for (final k in b.kids) {
+      _measure(k);
+    }
+    if (b.kids.isEmpty) {
+      b.w = cardW;
+      b.h = cardH;
+    } else if (b.hang) {
+      b.w = math.max(cardW, hangIndent + pillW);
+      b.h = cardH + hangGap + b.kids.length * (pillH + pillGap) - pillGap;
+    } else {
+      var tw = 0.0, mh = 0.0;
+      for (var i = 0; i < b.kids.length; i++) {
+        tw += b.kids[i].w + (i > 0 ? gapX : 0);
+        mh = math.max(mh, b.kids[i].h);
+      }
+      b.w = math.max(cardW, tw);
+      b.h = cardH + gapY + mh;
+    }
+  }
+
+  void _place(_PBox b, double x, double y) {
+    b.cy = y;
+    if (b.kids.isEmpty || b.hang) {
+      b.cx = x;
+      return;
+    }
+    var kx = x;
+    for (final k in b.kids) {
+      _place(k, kx, y + cardH + gapY);
+      kx += k.w + gapX;
+    }
+    final mid = ((b.kids.first.cx + cardW / 2) + (b.kids.last.cx + cardW / 2)) / 2;
+    b.cx = mid - cardW / 2;
+  }
+
+  // العرض من اليمين لليسار: نعكس المواضع أفقياً مع إبقاء النصوص سليمة
+  Rect _mr(double x, double y, double w, double h) => Rect.fromLTWH(bw - (x + w), y, w, h);
+  double _mx(double x) => bw - x;
+
+  void draw(Canvas c) {
+    final line = Paint()
+      ..color = Color.alphaBlend(app.primary.withAlpha(150), const Color(0xFFD9D2C8))
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round;
+    _lines(root, c, line);
+    _cards(root, c, true);
+  }
+
+  void _lines(_PBox b, Canvas c, Paint line) {
+    final pcx = b.cx + cardW / 2, pcy = b.cy + cardH;
+    if (b.hang) {
+      final tx = _mx(b.cx + trunkX);
+      final firstY = pcy + hangGap + pillH / 2;
+      final lastY = pcy + hangGap + (b.kids.length - 1) * (pillH + pillGap) + pillH / 2;
+      c.drawLine(Offset(tx, pcy), Offset(tx, lastY), line);
+      for (var i = 0; i < b.kids.length; i++) {
+        final py = firstY + i * (pillH + pillGap);
+        c.drawLine(Offset(tx, py), Offset(_mx(b.cx + hangIndent), py), line);
+      }
+      return;
+    }
+    for (final k in b.kids) {
+      final sx = _mx(pcx), ex = _mx(k.cx + cardW / 2), ey = k.cy;
+      final my = pcy + gapY * .5;
+      final path = Path()..moveTo(sx, pcy);
+      if ((ex - sx).abs() < 1) {
+        path.lineTo(ex, ey);
+      } else {
+        path.cubicTo(sx, my, ex, my, ex, ey);
+      }
+      c.drawPath(path, line);
+      _lines(k, c, line);
+    }
+  }
+
+  void _cards(_PBox b, Canvas c, bool top) {
+    _pdfCard(c, _mr(b.cx, b.cy, cardW, cardH), b.p, top);
+    if (b.hang) {
+      for (var i = 0; i < b.kids.length; i++) {
+        _pdfPill(c, _mr(b.cx + hangIndent, b.cy + cardH + hangGap + i * (pillH + pillGap), pillW, pillH), b.kids[i].p);
+      }
+    } else {
+      for (final k in b.kids) {
+        _cards(k, c, false);
+      }
+    }
+  }
+}
+
+void _iconAt(Canvas c, IconData icon, Offset center, double size, Color color) {
+  final tp = TextPainter(
+    text: TextSpan(text: String.fromCharCode(icon.codePoint), style: TextStyle(fontSize: size, fontFamily: icon.fontFamily, package: icon.fontPackage, color: color)),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  tp.paint(c, center - Offset(tp.width / 2, tp.height / 2));
+}
+
+void _avatarAt(Canvas canvas, Person p, Offset ac, double r, double iconSize) {
+  final f = p.female;
+  final tint = f ? const Color(0xFFFDEAF3) : const Color(0xFFE8F1FE);
+  final edge = f ? const Color(0xFFF4B9D4) : const Color(0xFFBCD6F6);
+  final ico = f ? const Color(0xFFD6408E) : const Color(0xFF3B7DDD);
+  final img = photoImages[photoKey(p)];
+  if (img != null) {
+    canvas.save();
+    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: ac, radius: r)));
+    paintImage(canvas: canvas, rect: Rect.fromCircle(center: ac, radius: r), image: img, fit: BoxFit.cover);
+    canvas.restore();
+  } else {
+    canvas.drawCircle(ac, r, Paint()..color = tint);
+    _iconAt(canvas, Icons.person_outline_rounded, ac, iconSize, ico);
+  }
+  canvas.drawCircle(ac, r, Paint()..color = edge..style = PaintingStyle.stroke..strokeWidth = 1.6);
+}
+
+void _pdfCard(Canvas canvas, Rect r, Person p, bool top) {
+  const ink = Color(0xFF14181A), lineC = Color(0xFFD5D9D2);
+  final c = app.primary;
+  final rr = RRect.fromRectAndRadius(r, const Radius.circular(22));
+  if (top) canvas.drawRRect(rr.inflate(6), Paint()..color = c.withAlpha(48)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
+  canvas.drawRRect(rr.shift(const Offset(0, 4)), Paint()..color = Colors.black.withAlpha(26)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 9));
+  canvas.drawRRect(rr, Paint()..color = top ? Color.alphaBlend(c.withAlpha(34), Colors.white) : Colors.white);
+  canvas.drawRRect(rr, Paint()..color = top ? c : lineC..style = PaintingStyle.stroke..strokeWidth = top ? 3 : 1.2);
+  final ac = Offset(r.center.dx, r.top + 20 + CardLayout.avatarR);
+  _avatarAt(canvas, p, ac, CardLayout.avatarR, 38);
+  final tp = TextPainter(
+    text: TextSpan(text: p.name, style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w800, height: 1.25)),
+    textAlign: TextAlign.center,
+    textDirection: TextDirection.rtl,
+    maxLines: 2,
+    ellipsis: '…',
+  )..layout(maxWidth: r.width - 16);
+  final ty = r.top + 20 + 2 * CardLayout.avatarR + 6;
+  tp.paint(canvas, Offset(r.center.dx - tp.width / 2, ty + (r.bottom - 8 - ty - tp.height) / 2));
+}
+
+void _pdfPill(Canvas canvas, Rect r, Person p) {
+  const ink = Color(0xFF14181A), lineC = Color(0xFFD5D9D2);
+  final rr = RRect.fromRectAndRadius(r, const Radius.circular(16));
+  canvas.drawRRect(rr.shift(const Offset(0, 2)), Paint()..color = Colors.black.withAlpha(22)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+  canvas.drawRRect(rr, Paint()..color = Colors.white);
+  canvas.drawRRect(rr, Paint()..color = lineC..style = PaintingStyle.stroke..strokeWidth = 1.2);
+  _avatarAt(canvas, p, Offset(r.right - 19, r.center.dy), 14, 19);
+  final tp = TextPainter(
+    text: TextSpan(text: p.name, style: const TextStyle(color: ink, fontSize: 13.5, fontWeight: FontWeight.w800)),
+    textDirection: TextDirection.rtl,
+    maxLines: 1,
+    ellipsis: '…',
+  )..layout(maxWidth: r.width - 46);
+  tp.paint(canvas, Offset(r.right - 40 - tp.width, r.center.dy - tp.height / 2));
+}
+
+Future<Uint8List> buildFamilyPdf() async {
+  final specs = <(String, String, _PdfTree)>[];
+  final top = app.children(app.root.id);
+  final deep = [for (final b in top) if (app.children(b.id).any((k) => app.children(k.id).isNotEmpty)) b];
+  final hasDeep = deep.isNotEmpty;
+  specs.add((
+    app.treeTitle,
+    '${ar(app.people.length)} فرداً · ${fmtDate(DateTime.now())}${hasDeep ? ' · تفاصيل الأحفاد في الصفحات التالية' : ''}',
+    _PdfTree(app.root, limit: hasDeep ? 2 : null),
+  ));
+  for (final b in deep) {
+    specs.add(('فرع ${b.name}', '${ar(app.descendants(b.id) + 1)} فرداً', _PdfTree(b)));
+  }
+  final doc = pw.Document();
+  const papers = [PdfPageFormat.a4, PdfPageFormat.a3, PdfPageFormat.a2];
+  for (var i = 0; i < specs.length; i++) {
+    final (title, sub, t) = specs[i];
+    final land = t.bw >= t.bh * .85;
+    late double W, H, sc;
+    for (final f in papers) {
+      W = land ? f.height : f.width;
+      H = land ? f.width : f.height;
+      sc = math.min((W - 56) / t.bw, (H - 56 - 84) / t.bh);
+      if (sc >= .6) break;
+    }
+    sc = sc.clamp(.15, 1.6).toDouble();
+    final pr = math.min(3.0, 3600 / math.max(W, H));
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec)..scale(pr);
+    c.drawRect(Rect.fromLTWH(0, 0, W, H), Paint()..color = Colors.white);
+    TextPainter tp(String s, double size, FontWeight w, Color col) => TextPainter(
+          text: TextSpan(text: s, style: TextStyle(color: col, fontSize: size, fontWeight: w)),
+          textDirection: TextDirection.rtl,
+          maxLines: 1,
+          ellipsis: '…',
+        )..layout(maxWidth: W - 80);
+    final t1 = tp(title, 26, FontWeight.w900, const Color(0xFF14181A));
+    t1.paint(c, Offset((W - t1.width) / 2, 18));
+    final t2 = tp(sub, 12, FontWeight.w400, const Color(0xFF5B6168));
+    t2.paint(c, Offset((W - t2.width) / 2, 52));
+    c.drawLine(Offset(40, 76), Offset(W - 40, 76), Paint()..color = const Color(0xFFE3DED5)..strokeWidth = 1);
+    final t3 = tp('صفحة ${ar(i + 1)} من ${ar(specs.length)}', 10, FontWeight.w400, const Color(0xFF8A8F96));
+    t3.paint(c, Offset((W - t3.width) / 2, H - 22));
+    final availH = H - 84 - 28;
+    c.save();
+    c.translate((W - t.bw * sc) / 2, 84 + (availH - t.bh * sc) / 2);
+    c.scale(sc);
+    t.draw(c);
+    c.restore();
+    final img = await rec.endRecording().toImage((W * pr).round(), (H * pr).round());
+    final bd = await img.toByteData(format: ui.ImageByteFormat.png);
+    final image = pw.MemoryImage(bd!.buffer.asUint8List());
+    doc.addPage(pw.Page(
+      pageFormat: PdfPageFormat(W, H),
+      build: (_) => pw.Image(image, width: W, height: H, fit: pw.BoxFit.fill),
+    ));
+  }
+  return doc.save();
+}
+
 int fullLeaves(Person p) {
   final k = app.children(p.id);
   return k.isEmpty ? 1 : k.fold<int>(0, (a, c) => a + fullLeaves(c));
@@ -2182,9 +2433,9 @@ class _TreeCanvasState extends State<TreeCanvas> {
   }
 
   Future<void> _pdf(bool share) async {
-    toast(context, 'جارٍ تجهيز ملف PDF…');
+    toast(context, 'جارٍ تجهيز ملف PDF (قد يستغرق لحظات)…');
     try {
-      final bytes = await _buildPdf();
+      final bytes = await buildFamilyPdf();
       if (share) {
         await Printing.sharePdf(bytes: bytes, filename: 'family-tree.pdf');
       } else {
