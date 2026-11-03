@@ -110,7 +110,7 @@ class AppState extends ChangeNotifier {
     Color(0xFF0B8FD0), Color(0xFF2B2FA0), Color(0xFF6A3D99), Color(0xFFC0158C),
   ];
   static const accents = [
-    Color(0xFF17803F), Color(0xFF0B6FD0), Color(0xFF7B3FBF), Color(0xFFC2410C), Color(0xFFB0124F),
+    Color(0xFFB4570E), Color(0xFF17803F), Color(0xFF0B6FD0), Color(0xFF7B3FBF), Color(0xFFB0124F),
   ];
 
   final List<Person> people = [];
@@ -354,6 +354,99 @@ class AppState extends ChangeNotifier {
 
   String exportJson() => jsonEncode(toMap()..['started'] = true);
 
+  // ───── تصدير / استيراد (CSV يفتح في Excel) ─────
+  static const csvHeader = ['المعرف', 'معرف الأب', 'الاسم', 'الجنس', 'تاريخ الميلاد', 'المدينة', 'الزوج/ة'];
+
+  String exportCsv() {
+    String q(String v) => '"${v.replaceAll('"', '""')}"';
+    final b = StringBuffer('\uFEFF');
+    b.writeln(csvHeader.map(q).join(','));
+    for (final p in people) {
+      b.writeln([p.id, p.parentId ?? '', p.name, p.female ? 'أنثى' : 'ذكر', p.birth, p.city, p.spouse].map(q).join(','));
+    }
+    return b.toString();
+  }
+
+  static List<List<String>> parseCsv(String t) {
+    if (t.startsWith('\uFEFF')) t = t.substring(1);
+    final rows = <List<String>>[];
+    var row = <String>[];
+    final f = StringBuffer();
+    var inQ = false;
+    void endRow() {
+      row.add(f.toString());
+      f.clear();
+      if (row.any((c) => c.trim().isNotEmpty)) rows.add(row);
+      row = <String>[];
+    }
+
+    for (var i = 0; i < t.length; i++) {
+      final ch = t[i];
+      if (inQ) {
+        if (ch == '"') {
+          if (i + 1 < t.length && t[i + 1] == '"') {
+            f.write('"');
+            i++;
+          } else {
+            inQ = false;
+          }
+        } else {
+          f.write(ch);
+        }
+      } else if (ch == '"') {
+        inQ = true;
+      } else if (ch == ',' || ch == ';') {
+        row.add(f.toString());
+        f.clear();
+      } else if (ch == '\n' || ch == '\r') {
+        if (ch == '\r' && i + 1 < t.length && t[i + 1] == '\n') i++;
+        endRow();
+      } else {
+        f.write(ch);
+      }
+    }
+    if (f.isNotEmpty || row.isNotEmpty) endRow();
+    return rows;
+  }
+
+  /// يستبدل الشجرة بمحتوى الملف. يعيد عدد الأفراد، أو -1 إذا كان الملف غير صالح.
+  int importCsv(String text) {
+    try {
+      final rows = parseCsv(text);
+      if (rows.length < 2) return -1;
+      String cell(List<String> r, int i) => i < r.length ? r[i].trim() : '';
+      final list = <Person>[];
+      final ids = <String>{};
+      for (final r in rows.skip(1)) {
+        final id = cell(r, 0), parent = cell(r, 1), name = cell(r, 2);
+        if (id.isEmpty || name.isEmpty || !ids.add(id)) return -1;
+        final g = cell(r, 3);
+        list.add(Person(id, name, parent.isEmpty ? null : parent,
+            female: g.startsWith('أ') || g.toLowerCase().startsWith('f'), birth: cell(r, 4), city: cell(r, 5), spouse: cell(r, 6)));
+      }
+      final roots = list.where((p) => p.parentId == null).toList();
+      if (roots.length != 1 || list.any((p) => p.parentId != null && !ids.contains(p.parentId))) return -1;
+      people
+        ..clear()
+        ..addAll(list);
+      events.clear();
+      _img.clear();
+      _imgLen.clear();
+      _root = roots.first;
+      var mx = 0;
+      for (final p in list) {
+        final m = RegExp(r'^p(\d+)$').firstMatch(p.id);
+        if (m != null) mx = math.max(mx, int.parse(m.group(1)!));
+      }
+      _n = math.max(mx + 1, list.length + 1);
+      started = true;
+      notifyListeners();
+      return list.length;
+    } catch (_) {
+      return -1;
+    }
+  }
+
   bool restore(String raw) {
     try {
       final ok = applyMap(jsonDecode(raw) as Map<String, dynamic>);
@@ -443,7 +536,7 @@ ThemeData buildTheme(Brightness b) {
     final text = GoogleFonts.tajawalTextTheme(base.textTheme);
     final light = b == Brightness.light;
     return base.copyWith(
-      scaffoldBackgroundColor: light ? const Color(0xFFF3F5F1) : const Color(0xFF0C1110),
+      scaffoldBackgroundColor: light ? const Color(0xFFF8F4EC) : const Color(0xFF14100C),
       textTheme: text,
       primaryTextTheme: text,
       appBarTheme: AppBarTheme(
@@ -1152,73 +1245,184 @@ class _Quick extends StatelessWidget {
 
 // ═════════════════════════ الشجرة ═════════════════════════
 
-class TreeScreen extends StatelessWidget {
+class TreeScreen extends StatefulWidget {
   const TreeScreen({super.key});
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 84),
-        child: FloatingActionButton.extended(
-          onPressed: () => openAdd(context),
-          icon: const Icon(Icons.add_rounded),
-          label: const Text('إضافة فرد', style: TextStyle(fontWeight: FontWeight.w800)),
+  State<TreeScreen> createState() => _TreeScreenState();
+}
+
+class _TreeScreenState extends State<TreeScreen> {
+  int view = 0; // 0 الشجرة، 1 القائمة
+
+  Future<void> _exportCsv() async {
+    try {
+      final d = DateTime.now();
+      final name = 'family-tree-${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}.csv';
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'تصدير الشجرة',
+        fileName: name,
+        bytes: Uint8List.fromList(utf8.encode(app.exportCsv())),
+      );
+      if (mounted) toast(context, path == null ? 'لم يتم حفظ الملف' : 'تم تصدير الشجرة. افتح الملف في Excel');
+    } catch (_) {
+      if (mounted) toast(context, 'تعذر تصدير الملف');
+    }
+  }
+
+  Future<void> _importCsv() async {
+    try {
+      final res = await FilePicker.platform.pickFiles(type: FileType.any, withData: true);
+      if (res == null || res.files.isEmpty) return;
+      final f = res.files.single;
+      final bytes = f.bytes ?? await File(f.path!).readAsBytes();
+      if (!mounted) return;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('استيراد الشجرة؟'),
+          content: const Text('ستُستبدل الشجرة الحالية بالبيانات الموجودة في الملف.\nالملف يجب أن يكون بصيغة CSV (احفظه من Excel بصيغة CSV UTF-8).'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('إلغاء')),
+            FilledButton(style: FilledButton.styleFrom(minimumSize: const Size(88, 44)), onPressed: () => Navigator.pop(c, true), child: const Text('استيراد')),
+          ],
         ),
-      ),
+      );
+      if (ok != true) return;
+      final n = app.importCsv(utf8.decode(bytes, allowMalformed: true));
+      if (mounted) toast(context, n < 0 ? 'الملف غير صالح. استخدم ملفاً مُصدَّراً من التطبيق' : 'تم استيراد ${ar(n)} فرداً');
+    } catch (_) {
+      if (mounted) toast(context, 'تعذر قراءة الملف');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final light = Theme.of(context).brightness == Brightness.light;
+    return Scaffold(
       body: SafeArea(
         bottom: false,
         child: ListenableBuilder(
           listenable: app,
           builder: (context, _) {
-            final kids = app.children(app.root.id);
-            final dark = Color.lerp(app.primary, Colors.black, .38)!;
-            return ListView(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, kNavPad + 40),
-              children: [
-                PageHeader('الشجرة', subtitle: '${ar(app.people.length)} فرداً · ${ar(kids.length)} فروع', actions: [
-                  IconButton.filledTonal(tooltip: 'الشجرة الكاملة', icon: const Icon(Icons.hub_outlined), onPressed: () => openFullTree(context)),
-                ]),
-                Ink(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: [app.primary, dark], begin: Alignment.topRight, end: Alignment.bottomLeft),
-                    borderRadius: BorderRadius.circular(28),
+            final males = app.people.where((p) => !p.female).length;
+            final females = app.people.length - males;
+            return Column(children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: PageHeader(app.treeTitle, subtitle: '${ar(app.people.length)} فرد · ${ar(males)} ذكور · ${ar(females)} إناث'),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                child: Row(children: [
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 42), padding: const EdgeInsets.symmetric(horizontal: 14)),
+                    onPressed: _exportCsv,
+                    icon: const Icon(Icons.file_download_outlined, size: 20),
+                    label: const Text('تصدير'),
                   ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(28),
-                    onTap: () => openPerson(context, app.root),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(children: [
-                        Avatar(app.root, size: 64, ring: Colors.white),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(app.root.name, style: const TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w900)),
-                            Text('جذر الشجرة · ${ar(kids.length)} فروع', style: const TextStyle(color: Colors.white70)),
-                          ]),
-                        ),
-                        const Icon(Icons.chevron_left_rounded, color: Colors.white),
-                      ]),
+                  const SizedBox(width: 10),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 42), padding: const EdgeInsets.symmetric(horizontal: 14)),
+                    onPressed: _importCsv,
+                    icon: const Icon(Icons.description_outlined, size: 20),
+                    label: const Text('استيراد Excel'),
+                  ),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Row(children: [
+                  Expanded(
+                    child: SegmentedButton<int>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(value: 0, label: Text('الشجرة'), icon: Icon(Icons.account_tree_outlined)),
+                        ButtonSegment(value: 1, label: Text('القائمة'), icon: Icon(Icons.grid_view_rounded)),
+                      ],
+                      selected: {view},
+                      onSelectionChanged: (s) => setState(() => view = s.first),
                     ),
                   ),
-                ),
-                if (kids.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 28),
-                    child: Text('لم تُضف أفراداً بعد.\nاضغط "إضافة فرد" للبدء.',
-                        textAlign: TextAlign.center, style: TextStyle(height: 1.7, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                  const SizedBox(width: 10),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(minimumSize: const Size(0, 44), padding: const EdgeInsets.symmetric(horizontal: 16)),
+                    onPressed: () => openAdd(context),
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('إضافة فرد'),
                   ),
-                Padding(
-                  padding: const EdgeInsetsDirectional.only(start: 34),
-                  child: Column(children: [
-                    for (var i = 0; i < kids.length; i++) NodeTile(key: ValueKey(kids[i].id), p: kids[i], last: i == kids.length - 1),
-                  ]),
-                ),
-              ],
-            );
+                ]),
+              ),
+              Expanded(
+                child: view == 0
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, kNavPad - 6),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: light ? const Color(0xFFF7F5F0) : cs.surfaceContainerLow,
+                            borderRadius: BorderRadius.circular(28),
+                            border: Border.all(color: cs.outlineVariant.withAlpha(120)),
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: const TreeCanvas(),
+                        ),
+                      )
+                    : const _TreeList(),
+              ),
+            ]);
           },
         ),
       ),
+    );
+  }
+}
+
+class _TreeList extends StatelessWidget {
+  const _TreeList();
+  @override
+  Widget build(BuildContext context) {
+    final kids = app.children(app.root.id);
+    final dark = Color.lerp(app.primary, Colors.black, .38)!;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, kNavPad + 40),
+      children: [
+        Ink(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [app.primary, dark], begin: Alignment.topRight, end: Alignment.bottomLeft),
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(28),
+            onTap: () => openPerson(context, app.root),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(children: [
+                Avatar(app.root, size: 64, ring: Colors.white),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(app.root.name, style: const TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w900)),
+                    Text('جذر الشجرة · ${ar(kids.length)} فروع', style: const TextStyle(color: Colors.white70)),
+                  ]),
+                ),
+                const Icon(Icons.chevron_left_rounded, color: Colors.white),
+              ]),
+            ),
+          ),
+        ),
+        if (kids.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 28),
+            child: Text('لم تُضف أفراداً بعد.\nاضغط "إضافة فرد" للبدء.',
+                textAlign: TextAlign.center, style: TextStyle(height: 1.7, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+          ),
+        Padding(
+          padding: const EdgeInsetsDirectional.only(start: 34),
+          child: Column(children: [
+            for (var i = 0; i < kids.length; i++) NodeTile(key: ValueKey(kids[i].id), p: kids[i], last: i == kids.length - 1),
+          ]),
+        ),
+      ],
     );
   }
 }
@@ -1348,6 +1552,7 @@ abstract class TreeGeometry {
   Offset get rootCenter;
   bool visible(Person p);
   Person? hit(Offset o);
+  bool toggleHit(Offset o, Person p);
   CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true});
 }
 
@@ -1439,6 +1644,9 @@ class RadialLayout implements TreeGeometry {
     }
     return null;
   }
+
+  @override
+  bool toggleHit(Offset o, Person p) => p.parentId != null && app.children(p.id).isNotEmpty;
 
   @override
   CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true}) => _RadialPainter(this, fill, text, dot, dots: dots);
@@ -1543,6 +1751,182 @@ class _RadialPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter old) => true;
 }
 
+// ═════════════════════ صور الأفراد للرسم على اللوحة ═════════════════════
+
+final Map<String, ui.Image> photoImages = {};
+String photoKey(Person p) => '${p.id}:${p.photo.length}';
+
+Future<bool> loadPhotos() async {
+  var changed = false;
+  for (final p in app.people.toList()) {
+    if (p.photo.isEmpty || photoImages.containsKey(photoKey(p))) continue;
+    final b = app.imageOf(p);
+    if (b == null) continue;
+    try {
+      final codec = await ui.instantiateImageCodec(b, targetWidth: 160);
+      final f = await codec.getNextFrame();
+      photoImages[photoKey(p)] = f.image;
+      changed = true;
+    } catch (_) {}
+  }
+  return changed;
+}
+
+/// تخطيط البطاقات العمودي: الجذر في الأعلى والأبناء تحته بخطوط متعامدة.
+class CardLayout implements TreeGeometry {
+  static const double cardW = 132, cardH = 138, gapX = 28, gapY = 76, margin = 44, avatarR = 34;
+  final Set<String> expanded;
+  final bool all;
+  final Map<String, Offset> pos = {};
+  double _next = 0;
+  int maxDepth = 0;
+
+  CardLayout(this.expanded, {this.all = false}) {
+    _place(app.root, 0);
+  }
+
+  bool isOpen(Person p) => all || p.parentId == null || expanded.contains(p.id);
+
+  double _place(Person p, int depth) {
+    maxDepth = math.max(maxDepth, depth);
+    final kids = isOpen(p) ? app.children(p.id) : <Person>[];
+    double x;
+    if (kids.isEmpty) {
+      x = _next;
+      _next += 1;
+    } else {
+      final xs = [for (final k in kids) _place(k, depth + 1)];
+      x = (xs.first + xs.last) / 2;
+    }
+    pos[p.id] = Offset(x, depth.toDouble());
+    return x;
+  }
+
+  double get slotW => cardW + gapX;
+
+  @override
+  Size get size => Size(margin * 2 + _next * slotW - gapX, margin * 2 + (maxDepth + 1) * cardH + maxDepth * gapY);
+
+  Rect rect(Person p) {
+    final o = pos[p.id]!;
+    final sx = _next - 1 - o.dx; // الابن الأول على اليمين
+    return Rect.fromLTWH(margin + sx * slotW, margin + o.dy * (cardH + gapY), cardW, cardH);
+  }
+
+  Rect badgeRect(Person p) {
+    final r = rect(p);
+    return Rect.fromCenter(center: Offset(r.center.dx, r.bottom), width: 34, height: 34);
+  }
+
+  @override
+  Offset get rootCenter => rect(app.root).center;
+  @override
+  bool visible(Person p) => pos.containsKey(p.id);
+
+  @override
+  Person? hit(Offset o) {
+    for (final p in app.people) {
+      if (!visible(p)) continue;
+      if (rect(p).inflate(2).contains(o) || (p.parentId != null && app.children(p.id).isNotEmpty && badgeRect(p).contains(o))) return p;
+    }
+    return null;
+  }
+
+  @override
+  bool toggleHit(Offset o, Person p) => p.parentId != null && app.children(p.id).isNotEmpty && badgeRect(p).contains(o);
+
+  @override
+  CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true}) => _CardPainter(this, fill, text, dot);
+}
+
+class _CardPainter extends CustomPainter {
+  final CardLayout L;
+  final Color fill, text, line;
+  _CardPainter(this.L, this.fill, this.text, this.line);
+
+
+  void _icon(Canvas c, IconData icon, Offset center, double size, Color color) {
+    final tp = TextPainter(
+      text: TextSpan(text: String.fromCharCode(icon.codePoint), style: TextStyle(fontSize: size, fontFamily: icon.fontFamily, package: icon.fontPackage, color: color)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(c, center - Offset(tp.width / 2, tp.height / 2));
+  }
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final vis = [for (final p in app.people) if (L.visible(p)) p];
+    for (final p in vis) {
+      if (p.parentId == null) continue;
+      final a = L.rect(app.byId(p.parentId!)!), b = L.rect(p);
+      final sx = a.center.dx, sy = a.bottom, ex = b.center.dx, ey = b.top;
+      final my = sy + CardLayout.gapY * .5;
+      final path = Path()..moveTo(sx, sy);
+      if ((ex - sx).abs() < 1) {
+        path.lineTo(ex, ey);
+      } else {
+        path.cubicTo(sx, my, ex, my, ex, ey);
+      }
+      canvas.drawPath(path, Paint()..color = Color.alphaBlend(app.primary.withAlpha(150), line)..style = PaintingStyle.stroke..strokeWidth = 1.7..strokeCap = StrokeCap.round);
+    }
+    for (final p in vis) {
+      final r = L.rect(p);
+      final isRoot = p.parentId == null;
+      final c = app.colorOf(p);
+      final rr = RRect.fromRectAndRadius(r, const Radius.circular(22));
+      if (isRoot) {
+        canvas.drawRRect(rr.inflate(6), Paint()..color = c.withAlpha(48)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
+      }
+      canvas.drawRRect(rr.shift(const Offset(0, 4)), Paint()..color = Colors.black.withAlpha(26)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 9));
+      canvas.drawRRect(rr, Paint()..color = isRoot ? Color.alphaBlend(c.withAlpha(34), fill) : fill);
+      canvas.drawRRect(rr, Paint()..color = isRoot ? c : line.withAlpha(110)..style = PaintingStyle.stroke..strokeWidth = isRoot ? 3 : 1.2);
+
+      final ac = Offset(r.center.dx, r.top + 20 + CardLayout.avatarR);
+      final female = p.female;
+      final tint = female ? const Color(0xFFFDEAF3) : const Color(0xFFE8F1FE);
+      final edge = female ? const Color(0xFFF4B9D4) : const Color(0xFFBCD6F6);
+      final ico = female ? const Color(0xFFD6408E) : const Color(0xFF3B7DDD);
+      final img = photoImages[photoKey(p)];
+      if (img != null) {
+        canvas.save();
+        canvas.clipPath(Path()..addOval(Rect.fromCircle(center: ac, radius: CardLayout.avatarR)));
+        paintImage(canvas: canvas, rect: Rect.fromCircle(center: ac, radius: CardLayout.avatarR), image: img, fit: BoxFit.cover);
+        canvas.restore();
+      } else {
+        canvas.drawCircle(ac, CardLayout.avatarR, Paint()..color = tint);
+        _icon(canvas, Icons.person_outline_rounded, ac, 38, ico);
+      }
+      canvas.drawCircle(ac, CardLayout.avatarR, Paint()..color = edge..style = PaintingStyle.stroke..strokeWidth = 1.6);
+
+      final tp = TextPainter(
+        text: TextSpan(text: p.name, style: TextStyle(color: text, fontSize: 14, fontWeight: FontWeight.w800, height: 1.25)),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.rtl,
+        maxLines: 2,
+        ellipsis: '…',
+      )..layout(maxWidth: CardLayout.cardW - 16);
+      final top = r.top + 20 + 2 * CardLayout.avatarR + 6;
+      tp.paint(canvas, Offset(r.center.dx - tp.width / 2, top + (r.bottom - 8 - top - tp.height) / 2));
+
+      final n = app.children(p.id).length;
+      if (!isRoot && n > 0 && !L.all) {
+        final open = L.isOpen(p);
+        final bc = Offset(r.center.dx, r.bottom);
+        canvas.drawCircle(bc, 12, Paint()..color = open ? fill : c);
+        canvas.drawCircle(bc, 12, Paint()..color = c..style = PaintingStyle.stroke..strokeWidth = 2);
+        final bt = TextPainter(
+          text: TextSpan(text: open ? '−' : '+${ar(n)}', style: TextStyle(color: open ? c : onColor(c), fontSize: open ? 16 : 10, fontWeight: FontWeight.w900)),
+          textDirection: TextDirection.rtl,
+        )..layout();
+        bt.paint(canvas, bc - Offset(bt.width / 2, bt.height / 2));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => true;
+}
+
 int fullLeaves(Person p) {
   final k = app.children(p.id);
   return k.isEmpty ? 1 : k.fold<int>(0, (a, c) => a + fullLeaves(c));
@@ -1596,6 +1980,9 @@ class TreeLayout implements TreeGeometry {
   }
 
   @override
+  bool toggleHit(Offset o, Person p) => p.parentId != null && app.children(p.id).isNotEmpty;
+
+  @override
   CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true}) => _TreePainter(this, fill, text, dot, dots: dots);
 
   double _layoutSide(List<Person> list, int sign) {
@@ -1639,43 +2026,72 @@ class TreeLayout implements TreeGeometry {
   }
 }
 
-class FullTreeScreen extends StatefulWidget {
-  const FullTreeScreen({super.key});
+/// لوحة الشجرة: بطاقات عمودية / دائري / جانبين
+class TreeCanvas extends StatefulWidget {
+  const TreeCanvas({super.key});
   @override
-  State<FullTreeScreen> createState() => _FullTreeScreenState();
+  State<TreeCanvas> createState() => _TreeCanvasState();
 }
 
-class _FullTreeScreenState extends State<FullTreeScreen> {
+class _TreeCanvasState extends State<TreeCanvas> {
   final tc = TransformationController();
-  bool radial = true;
+  int mode = 0; // 0 بطاقات، 1 دائري، 2 جانبين
+  Size _vp = Size.zero;
+  int _lastSig = 0;
   late Set<String> expanded = _defaultExpanded();
   late TreeGeometry geo = _make();
 
-  Set<String> _defaultExpanded() => {for (final b in app.children(app.root.id)) b.id};
+  Set<String> _defaultExpanded() => mode == 0 ? <String>{} : {for (final b in app.children(app.root.id)) b.id};
 
-  TreeGeometry _make({bool all = false}) => radial ? RadialLayout(expanded, all: all) : TreeLayout(expanded, all: all);
+  TreeGeometry _make({bool all = false}) =>
+      mode == 0 ? CardLayout(expanded, all: all) : mode == 1 ? RadialLayout(expanded, all: all) : TreeLayout(expanded, all: all);
 
   bool get _allOpen => app.people.where((p) => p.parentId != null && app.children(p.id).isNotEmpty).every((p) => expanded.contains(p.id));
+
+  int _sig() => Object.hashAll([for (final p in app.people) Object.hash(p.id, p.name, p.parentId, p.photo.length, p.female)]);
 
   @override
   void initState() {
     super.initState();
+    _lastSig = _sig();
+    app.addListener(_onApp);
+    _loadPhotos();
     WidgetsBinding.instance.addPostFrameCallback((_) => _reset());
   }
 
   @override
   void dispose() {
+    app.removeListener(_onApp);
     tc.dispose();
     super.dispose();
   }
 
+  void _loadPhotos() => loadPhotos().then((c) {
+        if (c && mounted) setState(() {});
+      });
+
+  void _onApp() {
+    if (!mounted || !app.hasTree) return;
+    final s = _sig();
+    if (s == _lastSig) return;
+    _lastSig = s;
+    _relayout(() {});
+    _loadPhotos();
+  }
+
   void _reset() {
-    if (!mounted) return;
-    final s = MediaQuery.of(context).size;
-    final sc = math.min(1.0, math.max(.5, s.width / geo.size.width * 1.5));
+    if (!mounted || _vp.isEmpty) return;
     final rc = geo.rootCenter;
+    if (mode == 0) {
+      const sc = .7;
+      tc.value = Matrix4.identity()
+        ..translate(_vp.width / 2 - rc.dx * sc, 90 - rc.dy * sc)
+        ..scale(sc, sc, 1.0);
+      return;
+    }
+    final sc = math.min(1.0, math.max(.5, _vp.width / geo.size.width * 1.5));
     tc.value = Matrix4.identity()
-      ..translate(s.width / 2 - rc.dx * sc, s.height / 2 - rc.dy * sc)
+      ..translate(_vp.width / 2 - rc.dx * sc, _vp.height / 2 - rc.dy * sc)
       ..scale(sc, sc, 1.0);
   }
 
@@ -1691,9 +2107,11 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
     tc.value = Matrix4.translationValues(p0.dx - p1.dx, p0.dy - p1.dy, 0).multiplied(m);
   }
 
-  void _switchMode() {
+  void _setMode(int m) {
+    if (m == mode) return;
     setState(() {
-      radial = !radial;
+      mode = m;
+      expanded = _defaultExpanded();
       geo = _make();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _reset());
@@ -1704,8 +2122,7 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
       });
 
   void _zoom(double f) {
-    final s = MediaQuery.of(context).size;
-    final cx = s.width / 2, cy = s.height / 2;
+    final cx = _vp.width / 2, cy = _vp.height / 2;
     final m = Matrix4.identity()
       ..translate(cx, cy)
       ..scale(f, f, 1.0)
@@ -1720,7 +2137,7 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
     final p = geo.hit(o);
     if (p == null) return;
     HapticFeedback.selectionClick();
-    if (p.parentId != null && app.children(p.id).isNotEmpty) {
+    if (geo.toggleHit(o, p)) {
       _toggle(p);
     } else {
       openPerson(context, p);
@@ -1728,10 +2145,14 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
   }
 
   Future<Uint8List> _buildPdf() async {
-    final L = radial ? RadialLayout(const {}, all: true) as TreeGeometry : TreeLayout(const {}, all: true);
+    final TreeGeometry L = mode == 0
+        ? CardLayout(const {}, all: true)
+        : mode == 1
+            ? RadialLayout(const {}, all: true)
+            : TreeLayout(const {}, all: true);
     const titleH = 96.0;
-    final W = L.size.width, H = L.size.height + titleH;
-    final pr = (4096 / math.max(W, H)).clamp(1.0, 3.0).toDouble();
+    final W = math.max(L.size.width, 420.0), H = L.size.height + titleH;
+    final pr = (4096 / math.max(W, H)).clamp(.4, 3.0).toDouble();
     final rec = ui.PictureRecorder();
     final c = Canvas(rec)..scale(pr);
     c.drawRect(Rect.fromLTWH(0, 0, W, H), Paint()..color = Colors.white);
@@ -1746,7 +2167,7 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
     )..layout();
     t2.paint(c, Offset((W - t2.width) / 2, 62));
     c.save();
-    c.translate(0, titleH);
+    c.translate((W - L.size.width) / 2, titleH);
     L.painter(Colors.white, const Color(0xFF14181A), const Color(0xFFD5D9D2), dots: false).paint(c, L.size);
     c.restore();
     final img = await rec.endRecording().toImage((W * pr).round(), (H * pr).round());
@@ -1774,58 +2195,111 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
     }
   }
 
+  Widget _roundBtn(BuildContext context, IconData icon, String tip, VoidCallback? onTap) {
+    final cs = Theme.of(context).colorScheme;
+    final light = Theme.of(context).brightness == Brightness.light;
+    return Tooltip(
+      message: tip,
+      child: Material(
+        color: light ? Colors.white : cs.surfaceContainerHigh,
+        elevation: 2,
+        shadowColor: Colors.black45,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap == null
+              ? null
+              : () {
+                  HapticFeedback.selectionClick();
+                  onTap();
+                },
+          child: SizedBox(width: 52, height: 52, child: Icon(icon, size: 26)),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final top = MediaQuery.of(context).padding.top + kToolbarHeight;
     final allOpen = _allOpen;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        title: const Text('الشجرة الكاملة'),
-        actions: [
-          IconButton(
-            tooltip: radial ? 'عرض على الجانبين' : 'عرض دائري',
-            icon: Icon(radial ? Icons.account_tree_rounded : Icons.donut_large_rounded),
-            onPressed: _switchMode,
-          ),
-          IconButton(
-            tooltip: allOpen ? 'طي الفروع' : 'توسيع الكل',
-            icon: Icon(allOpen ? Icons.unfold_less_rounded : Icons.unfold_more_rounded),
-            onPressed: () => _relayout(() => expanded = allOpen ? _defaultExpanded() : {for (final p in app.people) if (app.children(p.id).isNotEmpty) p.id}),
-          ),
-          PopupMenuButton<bool>(
-            tooltip: 'حفظ PDF',
-            icon: const Icon(Icons.picture_as_pdf_rounded),
-            onSelected: _pdf,
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: false, child: Text('حفظ / طباعة كـ PDF')),
-              PopupMenuItem(value: true, child: Text('مشاركة ملف PDF')),
-            ],
-          ),
-        ],
-      ),
-      body: Stack(children: [
-        InteractiveViewer(
-          transformationController: tc,
-          constrained: false,
-          minScale: .2,
-          maxScale: 3,
-          boundaryMargin: const EdgeInsets.all(600),
-          child: GestureDetector(
-            onTapUp: (d) => _tap(d.localPosition),
-            onLongPressStart: (d) {
-              final p = geo.hit(d.localPosition);
-              if (p != null) {
-                HapticFeedback.mediumImpact();
-                openPerson(context, p);
-              }
-            },
-            child: CustomPaint(size: geo.size, painter: geo.painter(cs.surface, cs.onSurface, cs.outlineVariant)),
+    return LayoutBuilder(builder: (context, box) {
+      final first = _vp.isEmpty;
+      _vp = Size(box.maxWidth, box.maxHeight);
+      if (first) WidgetsBinding.instance.addPostFrameCallback((_) => _reset());
+      return Stack(children: [
+        Positioned.fill(
+          child: InteractiveViewer(
+            transformationController: tc,
+            constrained: false,
+            minScale: .2,
+            maxScale: 3,
+            boundaryMargin: const EdgeInsets.all(600),
+            child: GestureDetector(
+              onTapUp: (d) => _tap(d.localPosition),
+              onLongPressStart: (d) {
+                final p = geo.hit(d.localPosition);
+                if (p != null) {
+                  HapticFeedback.mediumImpact();
+                  openPerson(context, p);
+                }
+              },
+              child: CustomPaint(size: geo.size, painter: geo.painter(cs.surface, cs.onSurface, cs.outlineVariant)),
+            ),
           ),
         ),
+        // أدوات التكبير
         Positioned(
-          top: top + 4,
+          left: 12,
+          top: 12,
+          child: Column(children: [
+            _roundBtn(context, Icons.zoom_in_rounded, 'تكبير', () => _zoom(1.25)),
+            const SizedBox(height: 8),
+            _roundBtn(context, Icons.zoom_out_rounded, 'تصغير', () => _zoom(.8)),
+            const SizedBox(height: 8),
+            _roundBtn(context, Icons.open_in_full_rounded, 'إعادة الضبط', _reset),
+            const SizedBox(height: 6),
+            AnimatedBuilder(
+              animation: tc,
+              builder: (_, __) => Text('${ar((tc.value.getMaxScaleOnAxis() * 100).round())}٪', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+        ),
+        // أدوات الشكل و PDF
+        Positioned(
+          right: 12,
+          top: 12,
+          child: Row(children: [
+            PopupMenuButton<int>(
+              tooltip: 'شكل العرض',
+              onSelected: _setMode,
+              itemBuilder: (_) => [
+                for (final e in const [(0, 'بطاقات عمودية'), (1, 'دائري'), (2, 'على الجانبين')])
+                  CheckedPopupMenuItem(value: e.$1, checked: mode == e.$1, child: Text(e.$2)),
+              ],
+              child: IgnorePointer(child: _roundBtn(context, Icons.view_quilt_rounded, 'شكل العرض', null)),
+            ),
+            const SizedBox(width: 8),
+            _roundBtn(
+              context,
+              allOpen ? Icons.unfold_less_rounded : Icons.unfold_more_rounded,
+              allOpen ? 'طي الفروع' : 'توسيع الكل',
+              () => _relayout(() => expanded = allOpen ? _defaultExpanded() : {for (final p in app.people) if (app.children(p.id).isNotEmpty) p.id}),
+            ),
+            const SizedBox(width: 8),
+            PopupMenuButton<bool>(
+              tooltip: 'حفظ PDF',
+              onSelected: _pdf,
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: false, child: Text('حفظ / طباعة كـ PDF')),
+                PopupMenuItem(value: true, child: Text('مشاركة ملف PDF')),
+              ],
+              child: IgnorePointer(child: _roundBtn(context, Icons.picture_as_pdf_rounded, 'حفظ PDF', null)),
+            ),
+          ]),
+        ),
+        Positioned(
+          bottom: 10,
           left: 0,
           right: 0,
           child: IgnorePointer(
@@ -1833,22 +2307,26 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(color: cs.surfaceContainerHigh.withAlpha(230), borderRadius: BorderRadius.circular(20)),
-                child: Text('اضغط على الفرع لفتحه أو طيّه · اضغط مطولاً لفتح البطاقة',
-                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                child: Text(
+                  mode == 0 ? 'اضغط البطاقة لفتحها · الدائرة أسفلها تفتح الفرع أو تطويه' : 'اضغط الفرع لفتحه أو طيّه · اضغط مطولاً لفتح البطاقة',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
               ),
             ),
           ),
         ),
-      ]),
-      floatingActionButton: Column(mainAxisSize: MainAxisSize.min, children: [
-        FloatingActionButton.small(heroTag: 'z+', tooltip: 'تكبير', onPressed: () => _zoom(1.25), child: const Icon(Icons.add_rounded)),
-        const SizedBox(height: 8),
-        FloatingActionButton.small(heroTag: 'z-', tooltip: 'تصغير', onPressed: () => _zoom(.8), child: const Icon(Icons.remove_rounded)),
-        const SizedBox(height: 8),
-        FloatingActionButton.small(heroTag: 'z0', tooltip: 'إعادة الضبط', onPressed: _reset, child: const Icon(Icons.center_focus_strong_rounded)),
-      ]),
-    );
+      ]);
+    });
   }
+}
+
+class FullTreeScreen extends StatelessWidget {
+  const FullTreeScreen({super.key});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('الشجرة الكاملة')),
+        body: const SafeArea(top: false, child: TreeCanvas()),
+      );
 }
 
 class _TreePainter extends CustomPainter {
