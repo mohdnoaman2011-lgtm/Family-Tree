@@ -1343,12 +1343,212 @@ class _ElbowPainter extends CustomPainter {
 
 // ═════════════════════════ الشجرة الكاملة ═════════════════════════
 
+abstract class TreeGeometry {
+  Size get size;
+  Offset get rootCenter;
+  bool visible(Person p);
+  Person? hit(Offset o);
+  CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true});
+}
+
+Offset polar(double a, double r) => Offset(math.cos(a) * r, math.sin(a) * r);
+
+/// تخطيط دائري: الجذر في الوسط، والأجيال حلقات، وكل فرع له قطاع بلونه.
+class RadialLayout implements TreeGeometry {
+  static const double pillW = 124, pillH = 30, margin = 44, rootR = 52, ringGap = 40;
+  final Set<String> expanded;
+  final bool all;
+  final Map<String, double> ang = {};
+  final Map<String, double> rin = {};
+  final Map<String, int> dep = {};
+  double outer = rootR;
+
+  RadialLayout(this.expanded, {this.all = false}) {
+    final kids = app.children(app.root.id);
+    final total = kids.fold<int>(0, (a, k) => a + fullLeaves(k));
+    if (total > 0) {
+      var a0 = -math.pi / 2;
+      for (final k in kids) {
+        final span = 2 * math.pi * fullLeaves(k) / total;
+        _place(k, 1, a0, span);
+        a0 += span;
+      }
+    }
+    final byDepth = <int, List<double>>{};
+    ang.forEach((id, a) => byDepth.putIfAbsent(dep[id]!, () => []).add(a));
+    final maxD = byDepth.keys.fold<int>(0, math.max);
+    final rByDepth = <int, double>{};
+    var prevOuter = rootR;
+    for (var d = 1; d <= maxD; d++) {
+      final list = byDepth[d]!..sort();
+      var minGap = 2 * math.pi;
+      for (var i = 0; i < list.length; i++) {
+        final next = i == list.length - 1 ? list[0] + 2 * math.pi : list[i + 1];
+        final g = next - list[i];
+        if (g > 1e-6 && g < minGap) minGap = g;
+      }
+      final need = list.length > 1 ? (pillH + 10) / minGap : 0.0;
+      final r = math.max(prevOuter + (d == 1 ? 44 : ringGap), need);
+      rByDepth[d] = r;
+      prevOuter = r + pillW;
+    }
+    outer = prevOuter;
+    for (final id in ang.keys) {
+      rin[id] = rByDepth[dep[id]!]!;
+    }
+  }
+
+  bool isOpen(Person p) => all || expanded.contains(p.id);
+
+  int _vis(Person p) {
+    final k = isOpen(p) ? app.children(p.id) : <Person>[];
+    return k.isEmpty ? 1 : k.fold<int>(0, (a, c) => a + _vis(c));
+  }
+
+  void _place(Person p, int depth, double start, double span) {
+    ang[p.id] = start + span / 2;
+    dep[p.id] = depth;
+    final kids = isOpen(p) ? app.children(p.id) : <Person>[];
+    if (kids.isEmpty) return;
+    final total = kids.fold<int>(0, (a, k) => a + _vis(k));
+    var a0 = start;
+    for (final k in kids) {
+      final sp = span * _vis(k) / total;
+      _place(k, depth + 1, a0, sp);
+      a0 += sp;
+    }
+  }
+
+  Offset get center => Offset(outer + margin, outer + margin);
+  @override
+  Size get size => Size((outer + margin) * 2, (outer + margin) * 2);
+  @override
+  Offset get rootCenter => center;
+  @override
+  bool visible(Person p) => p.parentId == null || ang.containsKey(p.id);
+
+  @override
+  Person? hit(Offset o) {
+    final d = o - center;
+    if (d.distance <= rootR + 6) return app.root;
+    for (final e in ang.entries) {
+      final a = e.value, ri = rin[e.key]!;
+      final x = d.dx * math.cos(a) + d.dy * math.sin(a);
+      final y = -d.dx * math.sin(a) + d.dy * math.cos(a);
+      if (x >= ri - 4 && x <= ri + pillW + 14 && y.abs() <= pillH / 2 + 4) return app.byId(e.key);
+    }
+    return null;
+  }
+
+  @override
+  CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true}) => _RadialPainter(this, fill, text, dot, dots: dots);
+}
+
+class _RadialPainter extends CustomPainter {
+  final RadialLayout L;
+  final Color fill, text, dot;
+  final bool dots;
+  _RadialPainter(this.L, this.fill, this.text, this.dot, {this.dots = true});
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    if (dots) {
+      final dp = Paint()..color = dot.withAlpha(110);
+      for (double x = 20; x < s.width; x += 40) {
+        for (double y = 20; y < s.height; y += 40) {
+          canvas.drawCircle(Offset(x, y), 1.3, dp);
+        }
+      }
+    }
+    final c = L.center;
+    const pw = RadialLayout.pillW, ph = RadialLayout.pillH, rr = RadialLayout.rootR;
+    // حلقات إرشادية خفيفة
+    final guide = Paint()..color = dot.withAlpha(70)..style = PaintingStyle.stroke..strokeWidth = 1;
+    final seen = <double>{};
+    for (final r in L.rin.values) {
+      if (seen.add(r)) canvas.drawCircle(c, r, guide);
+    }
+    final vis = [for (final p in app.people) if (L.ang.containsKey(p.id)) p];
+    for (final p in vis) {
+      final a = L.ang[p.id]!;
+      final inner = c + polar(a, L.rin[p.id]!);
+      Offset start;
+      Offset startDir;
+      if (p.parentId == app.root.id) {
+        start = c + polar(a, rr);
+        startDir = polar(a, 1);
+      } else {
+        final pa = L.ang[p.parentId!]!;
+        start = c + polar(pa, L.rin[p.parentId!]! + pw);
+        startDir = polar(pa, 1);
+      }
+      final k = (inner - start).distance * .4;
+      canvas.drawPath(
+        Path()..moveTo(start.dx, start.dy)..cubicTo(start.dx + startDir.dx * k, start.dy + startDir.dy * k, inner.dx - math.cos(a) * k, inner.dy - math.sin(a) * k, inner.dx, inner.dy),
+        Paint()..color = app.colorOf(p)..style = PaintingStyle.stroke..strokeWidth = 2.4..strokeCap = StrokeCap.round,
+      );
+    }
+    for (final p in vis) {
+      final a = L.ang[p.id]!, ri = L.rin[p.id]!;
+      final col = app.colorOf(p);
+      canvas.save();
+      canvas.translate(c.dx, c.dy);
+      canvas.rotate(a);
+      final rr2 = RRect.fromRectAndRadius(Rect.fromLTWH(ri, -ph / 2, pw, ph), const Radius.circular(ph / 2));
+      canvas.drawShadow(Path()..addRRect(rr2), Colors.black, 2.5, false);
+      canvas.drawRRect(rr2, Paint()..color = fill);
+      canvas.drawRRect(rr2, Paint()..color = col..style = PaintingStyle.stroke..strokeWidth = 2.2);
+      final tp = TextPainter(
+        text: TextSpan(text: p.name, style: TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w800)),
+        textDirection: TextDirection.rtl,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: pw - 16);
+      canvas.save();
+      canvas.translate(ri + pw / 2, 0);
+      if (math.cos(a) < 0) canvas.rotate(math.pi);
+      tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+      canvas.restore();
+      canvas.restore();
+
+      final n = app.children(p.id).length;
+      if (n > 0 && !L.all) {
+        final open = L.isOpen(p);
+        final bc = c + polar(a, ri + pw + 3);
+        canvas.drawCircle(bc, 12, Paint()..color = open ? Colors.white : col);
+        canvas.drawCircle(bc, 12, Paint()..color = col..style = PaintingStyle.stroke..strokeWidth = 2);
+        final bt = TextPainter(
+          text: TextSpan(text: open ? '−' : '+${ar(n)}', style: TextStyle(color: open ? col : onColor(col), fontSize: open ? 16 : 10, fontWeight: FontWeight.w900)),
+          textDirection: TextDirection.rtl,
+        )..layout();
+        bt.paint(canvas, bc - Offset(bt.width / 2, bt.height / 2));
+      }
+    }
+    // الجذر
+    final root = app.root;
+    canvas.drawShadow(Path()..addOval(Rect.fromCircle(center: c, radius: rr)), Colors.black, 4, false);
+    canvas.drawCircle(c, rr, Paint()..color = app.primary);
+    canvas.drawCircle(c, rr - 4, Paint()..color = Colors.white.withAlpha(70)..style = PaintingStyle.stroke..strokeWidth = 2);
+    final rt = TextPainter(
+      text: TextSpan(text: root.name, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w900, height: 1.2)),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.rtl,
+      maxLines: 2,
+      ellipsis: '…',
+    )..layout(maxWidth: rr * 1.7);
+    rt.paint(canvas, c - Offset(rt.width / 2, rt.height / 2));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => true;
+}
+
 int fullLeaves(Person p) {
   final k = app.children(p.id);
   return k.isEmpty ? 1 : k.fold<int>(0, (a, c) => a + fullLeaves(c));
 }
 
-class TreeLayout {
+class TreeLayout implements TreeGeometry {
   static const double rowH = 50, colW = 175, pillW = 130, pillH = 36, margin = 36, rootW = 160, rootH = 50;
   final Set<String> expanded;
   final bool all;
@@ -1381,7 +1581,22 @@ class TreeLayout {
   }
 
   bool isOpen(Person p) => all || p.parentId == null || expanded.contains(p.id);
+  @override
   bool visible(Person p) => pos.containsKey(p.id);
+
+  @override
+  Offset get rootCenter => rect(app.root).center;
+
+  @override
+  Person? hit(Offset o) {
+    for (final p in app.people) {
+      if (visible(p) && rect(p).inflate(4).contains(o)) return p;
+    }
+    return null;
+  }
+
+  @override
+  CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true}) => _TreePainter(this, fill, text, dot, dots: dots);
 
   double _layoutSide(List<Person> list, int sign) {
     _next = 0;
@@ -1432,10 +1647,15 @@ class FullTreeScreen extends StatefulWidget {
 
 class _FullTreeScreenState extends State<FullTreeScreen> {
   final tc = TransformationController();
+  bool radial = true;
   late Set<String> expanded = _defaultExpanded();
-  late TreeLayout layout = TreeLayout(expanded);
+  late TreeGeometry geo = _make();
 
   Set<String> _defaultExpanded() => {for (final b in app.children(app.root.id)) b.id};
+
+  TreeGeometry _make({bool all = false}) => radial ? RadialLayout(expanded, all: all) : TreeLayout(expanded, all: all);
+
+  bool get _allOpen => app.people.where((p) => p.parentId != null && app.children(p.id).isNotEmpty).every((p) => expanded.contains(p.id));
 
   @override
   void initState() {
@@ -1452,24 +1672,31 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
   void _reset() {
     if (!mounted) return;
     final s = MediaQuery.of(context).size;
-    final sc = math.max(.6, math.min(1.0, s.width / layout.size.width));
-    final tx = s.width / 2 - layout.halfW * sc;
-    final ty = math.max(100.0, (s.height - layout.size.height * sc) / 2);
+    final sc = math.min(1.0, math.max(.5, s.width / geo.size.width * 1.5));
+    final rc = geo.rootCenter;
     tc.value = Matrix4.identity()
-      ..translate(tx, ty)
+      ..translate(s.width / 2 - rc.dx * sc, s.height / 2 - rc.dy * sc)
       ..scale(sc, sc, 1.0);
   }
 
   // يغيّر الطي/التوسيع مع إبقاء الجذر في نفس مكانه على الشاشة
   void _relayout(void Function() change) {
     final m = tc.value;
-    final p0 = MatrixUtils.transformPoint(m, layout.rect(app.root).center);
+    final p0 = MatrixUtils.transformPoint(m, geo.rootCenter);
     setState(() {
       change();
-      layout = TreeLayout(expanded);
+      geo = _make();
     });
-    final p1 = MatrixUtils.transformPoint(m, layout.rect(app.root).center);
+    final p1 = MatrixUtils.transformPoint(m, geo.rootCenter);
     tc.value = Matrix4.translationValues(p0.dx - p1.dx, p0.dy - p1.dy, 0).multiplied(m);
+  }
+
+  void _switchMode() {
+    setState(() {
+      radial = !radial;
+      geo = _make();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reset());
   }
 
   void _toggle(Person p) => _relayout(() {
@@ -1489,15 +1716,8 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
     tc.value = next;
   }
 
-  Person? _hit(Offset o) {
-    for (final p in app.people) {
-      if (layout.visible(p) && layout.rect(p).inflate(4).contains(o)) return p;
-    }
-    return null;
-  }
-
   void _tap(Offset o) {
-    final p = _hit(o);
+    final p = geo.hit(o);
     if (p == null) return;
     HapticFeedback.selectionClick();
     if (p.parentId != null && app.children(p.id).isNotEmpty) {
@@ -1508,7 +1728,7 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
   }
 
   Future<Uint8List> _buildPdf() async {
-    final L = TreeLayout(const {}, all: true);
+    final L = radial ? RadialLayout(const {}, all: true) as TreeGeometry : TreeLayout(const {}, all: true);
     const titleH = 96.0;
     final W = L.size.width, H = L.size.height + titleH;
     final pr = (4096 / math.max(W, H)).clamp(1.0, 3.0).toDouble();
@@ -1527,7 +1747,7 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
     t2.paint(c, Offset((W - t2.width) / 2, 62));
     c.save();
     c.translate(0, titleH);
-    _TreePainter(L, Colors.white, const Color(0xFF14181A), const Color(0xFFD5D9D2), dots: false).paint(c, L.size);
+    L.painter(Colors.white, const Color(0xFF14181A), const Color(0xFFD5D9D2), dots: false).paint(c, L.size);
     c.restore();
     final img = await rec.endRecording().toImage((W * pr).round(), (H * pr).round());
     final bd = await img.toByteData(format: ui.ImageByteFormat.png);
@@ -1558,20 +1778,21 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final top = MediaQuery.of(context).padding.top + kToolbarHeight;
+    final allOpen = _allOpen;
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('الشجرة الكاملة'),
         actions: [
           IconButton(
-            tooltip: 'توسيع الكل',
-            icon: const Icon(Icons.unfold_more_rounded),
-            onPressed: () => _relayout(() => expanded = {for (final p in app.people) if (app.children(p.id).isNotEmpty) p.id}),
+            tooltip: radial ? 'عرض على الجانبين' : 'عرض دائري',
+            icon: Icon(radial ? Icons.account_tree_rounded : Icons.donut_large_rounded),
+            onPressed: _switchMode,
           ),
           IconButton(
-            tooltip: 'طي الفروع',
-            icon: const Icon(Icons.unfold_less_rounded),
-            onPressed: () => _relayout(() => expanded = _defaultExpanded()),
+            tooltip: allOpen ? 'طي الفروع' : 'توسيع الكل',
+            icon: Icon(allOpen ? Icons.unfold_less_rounded : Icons.unfold_more_rounded),
+            onPressed: () => _relayout(() => expanded = allOpen ? _defaultExpanded() : {for (final p in app.people) if (app.children(p.id).isNotEmpty) p.id}),
           ),
           PopupMenuButton<bool>(
             tooltip: 'حفظ PDF',
@@ -1594,13 +1815,13 @@ class _FullTreeScreenState extends State<FullTreeScreen> {
           child: GestureDetector(
             onTapUp: (d) => _tap(d.localPosition),
             onLongPressStart: (d) {
-              final p = _hit(d.localPosition);
+              final p = geo.hit(d.localPosition);
               if (p != null) {
                 HapticFeedback.mediumImpact();
                 openPerson(context, p);
               }
             },
-            child: CustomPaint(size: layout.size, painter: _TreePainter(layout, cs.surface, cs.onSurface, cs.outlineVariant)),
+            child: CustomPaint(size: geo.size, painter: geo.painter(cs.surface, cs.onSurface, cs.outlineVariant)),
           ),
         ),
         Positioned(
