@@ -605,7 +605,7 @@ InputDecoration deco(BuildContext c, String label, {Widget? suffix, String? hint
 
 // ═════════════════════════ عناصر مشتركة ═════════════════════════
 
-class Surface extends StatelessWidget {
+class Surface extends StatefulWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
   final VoidCallback? onTap;
@@ -623,30 +623,65 @@ class Surface extends StatelessWidget {
   });
 
   @override
+  State<Surface> createState() => _SurfaceState();
+}
+
+class _SurfaceState extends State<Surface> {
+  bool down = false;
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final light = Theme.of(context).brightness == Brightness.light;
-    return Material(
-      color: color ?? (light ? Colors.white : cs.surfaceContainerLow),
+    final w = widget;
+    final interactive = w.onTap != null || w.onLongPress != null;
+    final card = Material(
+      color: w.color ?? (light ? Colors.white : cs.surfaceContainerLow),
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(radius),
+        borderRadius: BorderRadius.circular(w.radius),
         side: BorderSide(color: cs.outlineVariant.withAlpha(light ? 70 : 90)),
       ),
-      child: onTap == null && onLongPress == null
-          ? Padding(padding: padding, child: child)
+      child: !interactive
+          ? Padding(padding: w.padding, child: w.child)
           : InkWell(
-              onTap: onTap == null
+              onHighlightChanged: (v) => setState(() => down = v),
+              onTap: w.onTap == null
                   ? null
                   : () {
                       HapticFeedback.selectionClick();
-                      onTap!();
+                      w.onTap!();
                     },
-              onLongPress: onLongPress,
-              child: Padding(padding: padding, child: child),
+              onLongPress: w.onLongPress,
+              child: Padding(padding: w.padding, child: w.child),
             ),
     );
+    if (!interactive) return card;
+    return AnimatedScale(scale: down ? .97 : 1, duration: const Duration(milliseconds: 130), curve: Curves.easeOut, child: card);
   }
+}
+
+/// ظهور متدرّج: يتلاشى العنصر ويرتفع قليلاً عند فتح الشاشة (i = ترتيبه).
+class Reveal extends StatelessWidget {
+  final int i;
+  final Widget child;
+  const Reveal({super.key, required this.i, required this.child});
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: Duration(milliseconds: 420 + i * 140),
+        curve: Curves.easeOutCubic,
+        builder: (_, v, c) => Opacity(opacity: v.clamp(0.0, 1.0), child: Transform.translate(offset: Offset(0, (1 - v) * 22), child: c)),
+        child: child,
+      );
+}
+
+class _AppScroll extends MaterialScrollBehavior {
+  const _AppScroll();
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) => const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
+  @override
+  Widget buildOverscrollIndicator(BuildContext context, Widget child, ScrollableDetails details) => child;
 }
 
 class Avatar extends StatelessWidget {
@@ -822,6 +857,7 @@ class FamilyApp extends StatelessWidget {
       builder: (context, _) => MaterialApp(
         title: 'شجرة العائلة',
         debugShowCheckedModeBanner: false,
+        scrollBehavior: const _AppScroll(),
         themeMode: const [ThemeMode.system, ThemeMode.light, ThemeMode.dark][app.themeMode],
         theme: buildTheme(Brightness.light),
         darkTheme: buildTheme(Brightness.dark),
@@ -1004,14 +1040,20 @@ class Shell extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: light ? Colors.white : cs.surfaceContainerHigh,
                 borderRadius: BorderRadius.circular(34),
-                border: Border.all(color: cs.outlineVariant.withAlpha(110)),
                 boxShadow: [BoxShadow(color: Colors.black.withAlpha(light ? 28 : 90), blurRadius: 26, offset: const Offset(0, 8))],
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(34),
-                child: NavigationBar(
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: light ? Colors.white.withAlpha(185) : cs.surfaceContainerHigh.withAlpha(200),
+                      borderRadius: BorderRadius.circular(34),
+                      border: Border.all(color: cs.outlineVariant.withAlpha(110)),
+                    ),
+                    child: NavigationBar(
                   selectedIndex: app.tab,
                   onDestinationSelected: (i) {
                     HapticFeedback.selectionClick();
@@ -1023,6 +1065,8 @@ class Shell extends StatelessWidget {
                     NavigationDestination(icon: Icon(Icons.search_rounded), selectedIcon: Icon(Icons.manage_search_rounded), label: 'الأفراد'),
                     NavigationDestination(icon: Icon(Icons.tune_outlined), selectedIcon: Icon(Icons.tune_rounded), label: 'الإعدادات'),
                   ],
+                ),
+                  ),
                 ),
               ),
             ),
@@ -1053,7 +1097,7 @@ class HomeScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, kNavPad),
           children: [
-            Row(children: [
+            Reveal(i: 0, child: Row(children: [
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(DateTime.now().hour < 12 ? 'صباح الخير' : 'مساء الخير', style: TextStyle(color: cs.onSurfaceVariant)),
@@ -1061,9 +1105,9 @@ class HomeScreen extends StatelessWidget {
                 ]),
               ),
               GestureDetector(onTap: () => app.update(() => app.tab = 3), child: Avatar(app.root, size: 50)),
-            ]),
+            ])),
             const SizedBox(height: 18),
-            Container(
+            Reveal(i: 1, child: Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(colors: [app.primary, dark], begin: Alignment.topRight, end: Alignment.bottomLeft),
                 borderRadius: BorderRadius.circular(32),
@@ -1071,8 +1115,20 @@ class HomeScreen extends StatelessWidget {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(32),
                 child: Stack(children: [
-                  Positioned(top: -50, left: -30, child: _Blob(170, 26)),
-                  Positioned(bottom: -60, right: -20, child: _Blob(150, 18)),
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: RadialGradient(center: const Alignment(-.9, -1), radius: 1.2, colors: [Colors.white.withAlpha(52), Colors.transparent]),
+                      ),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: RadialGradient(center: const Alignment(1, 1.1), radius: 1.0, colors: [Color.lerp(app.primary, Colors.white, .35)!.withAlpha(120), Colors.transparent]),
+                      ),
+                    ),
+                  ),
                   Padding(
                     padding: const EdgeInsets.all(22),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1080,11 +1136,11 @@ class HomeScreen extends StatelessWidget {
                       Text(app.treeTitle, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900)),
                       const SizedBox(height: 18),
                       Row(children: [
-                        _Stat(ar(app.people.length), 'فرد'),
+                        _Stat(app.people.length, 'فرد'),
                         const SizedBox(width: 10),
-                        _Stat(ar(branches), 'فرع'),
+                        _Stat(branches, 'فرع'),
                         const SizedBox(width: 10),
-                        _Stat(ar(gens), 'أجيال'),
+                        _Stat(gens, 'أجيال'),
                       ]),
                       const SizedBox(height: 20),
                       SizedBox(
@@ -1099,9 +1155,9 @@ class HomeScreen extends StatelessWidget {
                   ),
                 ]),
               ),
-            ),
+            )),
             const SizedBox(height: 16),
-            Row(children: [
+            Reveal(i: 2, child: Row(children: [
               _Quick(Icons.person_add_alt_1_rounded, 'إضافة فرد', () => openAdd(context)),
               const SizedBox(width: 10),
               _Quick(Icons.search_rounded, 'بحث', () => app.update(() => app.tab = 2)),
@@ -1109,7 +1165,7 @@ class HomeScreen extends StatelessWidget {
               _Quick(Icons.hub_outlined, 'الشجرة الكاملة', () => openFullTree(context)),
               const SizedBox(width: 10),
               _Quick(Icons.diversity_3_rounded, 'صلة القرابة', () => openKinship(context)),
-            ]),
+            ])),
             if (recent.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 16),
@@ -1190,25 +1246,26 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-class _Blob extends StatelessWidget {
-  final double size;
-  final int alpha;
-  const _Blob(this.size, this.alpha);
-  @override
-  Widget build(BuildContext context) =>
-      Container(width: size, height: size, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withAlpha(alpha)));
-}
-
 class _Stat extends StatelessWidget {
-  final String value, label;
+  final int value;
+  final String label;
   const _Stat(this.value, this.label);
   @override
   Widget build(BuildContext context) => Expanded(
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(color: Colors.white.withAlpha(36), borderRadius: BorderRadius.circular(18)),
+          decoration: BoxDecoration(
+            color: Colors.white.withAlpha(34),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withAlpha(40)),
+          ),
           child: Column(children: [
-            Text(value, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)),
+            TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: value.toDouble()),
+              duration: const Duration(milliseconds: 1100),
+              curve: Curves.easeOutCubic,
+              builder: (_, v, __) => Text(ar(v.round()), style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)),
+            ),
             Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
           ]),
         ),
@@ -1245,51 +1302,208 @@ class _Quick extends StatelessWidget {
 
 // ═════════════════════════ الشجرة ═════════════════════════
 
-class TreeScreen extends StatefulWidget {
+class TreeScreen extends StatelessWidget {
   const TreeScreen({super.key});
-  @override
-  State<TreeScreen> createState() => _TreeScreenState();
-}
-
-class _TreeScreenState extends State<TreeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final light = Theme.of(context).brightness == Brightness.light;
     return Scaffold(
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 84),
+        child: FloatingActionButton.extended(
+          onPressed: () => openAdd(context),
+          icon: const Icon(Icons.add_rounded),
+          label: const Text('إضافة فرد', style: TextStyle(fontWeight: FontWeight.w800)),
+        ),
+      ),
       body: SafeArea(
         bottom: false,
         child: ListenableBuilder(
           listenable: app,
           builder: (context, _) {
-            final males = app.people.where((p) => !p.female).length;
-            final females = app.people.length - males;
+            final kids = app.children(app.root.id);
             return Column(children: [
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: PageHeader(app.treeTitle, subtitle: '${ar(app.people.length)} فرد · ${ar(males)} ذكور · ${ar(females)} إناث'),
+                child: PageHeader('الشجرة', subtitle: '${ar(app.people.length)} فرداً · ${ar(kids.length)} فروع', actions: [
+                  IconButton.filledTonal(tooltip: 'الشجرة الكاملة', icon: const Icon(Icons.hub_outlined), onPressed: () => openFullTree(context)),
+                ]),
               ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, kNavPad - 6),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: light ? const Color(0xFFF7F5F0) : cs.surfaceContainerLow,
-                      borderRadius: BorderRadius.circular(28),
-                      border: Border.all(color: cs.outlineVariant.withAlpha(120)),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: const TreeCanvas(),
-                  ),
-                ),
-              ),
+              const Expanded(child: _TreeList()),
             ]);
           },
         ),
       ),
     );
   }
+}
+
+class _TreeList extends StatelessWidget {
+  const _TreeList();
+  @override
+  Widget build(BuildContext context) {
+    final kids = app.children(app.root.id);
+    final dark = Color.lerp(app.primary, Colors.black, .38)!;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, kNavPad + 40),
+      children: [
+        Ink(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [app.primary, dark], begin: Alignment.topRight, end: Alignment.bottomLeft),
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(28),
+            onTap: () => openPerson(context, app.root),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(children: [
+                Avatar(app.root, size: 64, ring: Colors.white),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(app.root.name, style: const TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w900)),
+                    Text('جذر الشجرة · ${ar(kids.length)} فروع', style: const TextStyle(color: Colors.white70)),
+                  ]),
+                ),
+                const Icon(Icons.chevron_left_rounded, color: Colors.white),
+              ]),
+            ),
+          ),
+        ),
+        if (kids.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 28),
+            child: Text('لم تُضف أفراداً بعد.\nاضغط "إضافة فرد" للبدء.',
+                textAlign: TextAlign.center, style: TextStyle(height: 1.7, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+          ),
+        Padding(
+          padding: const EdgeInsetsDirectional.only(start: 34),
+          child: Column(children: [
+            for (var i = 0; i < kids.length; i++) NodeTile(key: ValueKey(kids[i].id), p: kids[i], last: i == kids.length - 1),
+          ]),
+        ),
+      ],
+    );
+  }
+}
+
+class NodeTile extends StatefulWidget {
+  final Person p;
+  final bool last;
+  const NodeTile({super.key, required this.p, required this.last});
+  @override
+  State<NodeTile> createState() => _NodeTileState();
+}
+
+class _NodeTileState extends State<NodeTile> {
+  bool open = false;
+  static const double cardH = 68;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.p;
+    final kids = app.children(p.id);
+    final c = app.colorOf(p);
+    final cs = Theme.of(context).colorScheme;
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        SizedBox(
+          width: 28,
+          child: CustomPaint(painter: _ElbowPainter(last: widget.last, rtl: rtl, color: cs.outlineVariant, midY: cardH / 2 + 12)),
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Column(children: [
+              Surface(
+                radius: 22,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                onTap: () => kids.isEmpty ? openPerson(context, p) : setState(() => open = !open),
+                onLongPress: () => openPerson(context, p),
+                child: SizedBox(
+                  height: cardH,
+                  child: Row(children: [
+                    Avatar(p, size: 46),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                        Text(kidsText(kids.length), style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+                      ]),
+                    ),
+                    if (kids.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(color: c.withAlpha(36), borderRadius: BorderRadius.circular(12)),
+                        child: Text(ar(kids.length), style: const TextStyle(fontWeight: FontWeight.w900)),
+                      ),
+                    if (kids.isNotEmpty)
+                      AnimatedRotation(
+                        turns: open ? .5 : 0,
+                        duration: const Duration(milliseconds: 220),
+                        child: Icon(Icons.expand_more_rounded, color: cs.onSurfaceVariant),
+                      ),
+                    IconButton(
+                      tooltip: 'بطاقة الفرد',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(Icons.north_west_rounded, size: 20, color: cs.onSurfaceVariant),
+                      onPressed: () => openPerson(context, p),
+                    ),
+                  ]),
+                ),
+              ),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment.topCenter,
+                child: open && kids.isNotEmpty
+                    ? Padding(
+                        padding: const EdgeInsetsDirectional.only(start: 20),
+                        child: Column(children: [
+                          for (var i = 0; i < kids.length; i++) NodeTile(key: ValueKey(kids[i].id), p: kids[i], last: i == kids.length - 1),
+                        ]),
+                      )
+                    : const SizedBox(width: double.infinity, height: 0),
+              ),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _ElbowPainter extends CustomPainter {
+  final bool last, rtl;
+  final Color color;
+  final double midY;
+  _ElbowPainter({required this.last, required this.rtl, required this.color, required this.midY});
+  @override
+  void paint(Canvas canvas, Size s) {
+    final paint = Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 2.2..strokeCap = StrokeCap.round;
+    final x = rtl ? s.width - 14 : 14.0;
+    final dir = rtl ? -1.0 : 1.0;
+    final edge = rtl ? 0.0 : s.width;
+    const r = 14.0;
+    if (last) {
+      canvas.drawPath(
+        Path()
+          ..moveTo(x, 0)
+          ..lineTo(x, midY - r)
+          ..quadraticBezierTo(x, midY, x + dir * r, midY)
+          ..lineTo(edge, midY),
+        paint,
+      );
+    } else {
+      canvas.drawLine(Offset(x, 0), Offset(x, s.height), paint);
+      canvas.drawLine(Offset(x, midY), Offset(edge, midY), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ElbowPainter o) => o.last != last || o.color != color || o.rtl != rtl;
 }
 
 // ═════════════════════════ الشجرة الكاملة ═════════════════════════
