@@ -2132,7 +2132,7 @@ Future<Uint8List> buildFamilyPdf() async {
     specs.add(('فرع ${b.name}', '${ar(app.descendants(b.id) + 1)} فرداً', _PdfTree(b)));
   }
   final doc = pw.Document();
-  const papers = [PdfPageFormat.a4, PdfPageFormat.a3, PdfPageFormat.a2];
+  const papers = [PdfPageFormat.a4, PdfPageFormat.a3, PdfPageFormat(1190.55, 1683.78)]; // A4 ثم A3 ثم A2
   for (var i = 0; i < specs.length; i++) {
     final (title, sub, t) = specs[i];
     final land = t.bw >= t.bh * .85;
