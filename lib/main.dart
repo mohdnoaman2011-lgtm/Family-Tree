@@ -1252,48 +1252,6 @@ class TreeScreen extends StatefulWidget {
 }
 
 class _TreeScreenState extends State<TreeScreen> {
-  int view = 0; // 0 الشجرة، 1 القائمة
-
-  Future<void> _exportCsv() async {
-    try {
-      final d = DateTime.now();
-      final name = 'family-tree-${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}.csv';
-      final path = await FilePicker.platform.saveFile(
-        dialogTitle: 'تصدير الشجرة',
-        fileName: name,
-        bytes: Uint8List.fromList(utf8.encode(app.exportCsv())),
-      );
-      if (mounted) toast(context, path == null ? 'لم يتم حفظ الملف' : 'تم تصدير الشجرة. افتح الملف في Excel');
-    } catch (_) {
-      if (mounted) toast(context, 'تعذر تصدير الملف');
-    }
-  }
-
-  Future<void> _importCsv() async {
-    try {
-      final res = await FilePicker.platform.pickFiles(type: FileType.any, withData: true);
-      if (res == null || res.files.isEmpty) return;
-      final f = res.files.single;
-      final bytes = f.bytes ?? await File(f.path!).readAsBytes();
-      if (!mounted) return;
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (c) => AlertDialog(
-          title: const Text('استيراد الشجرة؟'),
-          content: const Text('ستُستبدل الشجرة الحالية بالبيانات الموجودة في الملف.\nالملف يجب أن يكون بصيغة CSV (احفظه من Excel بصيغة CSV UTF-8).'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('إلغاء')),
-            FilledButton(style: FilledButton.styleFrom(minimumSize: const Size(88, 44)), onPressed: () => Navigator.pop(c, true), child: const Text('استيراد')),
-          ],
-        ),
-      );
-      if (ok != true) return;
-      final n = app.importCsv(utf8.decode(bytes, allowMalformed: true));
-      if (mounted) toast(context, n < 0 ? 'الملف غير صالح. استخدم ملفاً مُصدَّراً من التطبيق' : 'تم استيراد ${ar(n)} فرداً');
-    } catch (_) {
-      if (mounted) toast(context, 'تعذر قراءة الملف');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1312,62 +1270,19 @@ class _TreeScreenState extends State<TreeScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: PageHeader(app.treeTitle, subtitle: '${ar(app.people.length)} فرد · ${ar(males)} ذكور · ${ar(females)} إناث'),
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                child: Row(children: [
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 42), padding: const EdgeInsets.symmetric(horizontal: 14)),
-                    onPressed: _exportCsv,
-                    icon: const Icon(Icons.file_download_outlined, size: 20),
-                    label: const Text('تصدير'),
-                  ),
-                  const SizedBox(width: 10),
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 42), padding: const EdgeInsets.symmetric(horizontal: 14)),
-                    onPressed: _importCsv,
-                    icon: const Icon(Icons.description_outlined, size: 20),
-                    label: const Text('استيراد Excel'),
-                  ),
-                ]),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: Row(children: [
-                  Expanded(
-                    child: SegmentedButton<int>(
-                      showSelectedIcon: false,
-                      segments: const [
-                        ButtonSegment(value: 0, label: Text('الشجرة'), icon: Icon(Icons.account_tree_outlined)),
-                        ButtonSegment(value: 1, label: Text('القائمة'), icon: Icon(Icons.grid_view_rounded)),
-                      ],
-                      selected: {view},
-                      onSelectionChanged: (s) => setState(() => view = s.first),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(minimumSize: const Size(0, 44), padding: const EdgeInsets.symmetric(horizontal: 16)),
-                    onPressed: () => openAdd(context),
-                    icon: const Icon(Icons.add_rounded),
-                    label: const Text('إضافة فرد'),
-                  ),
-                ]),
-              ),
               Expanded(
-                child: view == 0
-                    ? Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, kNavPad - 6),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: light ? const Color(0xFFF7F5F0) : cs.surfaceContainerLow,
-                            borderRadius: BorderRadius.circular(28),
-                            border: Border.all(color: cs.outlineVariant.withAlpha(120)),
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: const TreeCanvas(),
-                        ),
-                      )
-                    : const _TreeList(),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, kNavPad - 6),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: light ? const Color(0xFFF7F5F0) : cs.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(color: cs.outlineVariant.withAlpha(120)),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: const TreeCanvas(),
+                  ),
+                ),
               ),
             ]);
           },
@@ -1375,174 +1290,6 @@ class _TreeScreenState extends State<TreeScreen> {
       ),
     );
   }
-}
-
-class _TreeList extends StatelessWidget {
-  const _TreeList();
-  @override
-  Widget build(BuildContext context) {
-    final kids = app.children(app.root.id);
-    final dark = Color.lerp(app.primary, Colors.black, .38)!;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, kNavPad + 40),
-      children: [
-        Ink(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(colors: [app.primary, dark], begin: Alignment.topRight, end: Alignment.bottomLeft),
-            borderRadius: BorderRadius.circular(28),
-          ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(28),
-            onTap: () => openPerson(context, app.root),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(children: [
-                Avatar(app.root, size: 64, ring: Colors.white),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(app.root.name, style: const TextStyle(color: Colors.white, fontSize: 21, fontWeight: FontWeight.w900)),
-                    Text('جذر الشجرة · ${ar(kids.length)} فروع', style: const TextStyle(color: Colors.white70)),
-                  ]),
-                ),
-                const Icon(Icons.chevron_left_rounded, color: Colors.white),
-              ]),
-            ),
-          ),
-        ),
-        if (kids.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 28),
-            child: Text('لم تُضف أفراداً بعد.\nاضغط "إضافة فرد" للبدء.',
-                textAlign: TextAlign.center, style: TextStyle(height: 1.7, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-          ),
-        Padding(
-          padding: const EdgeInsetsDirectional.only(start: 34),
-          child: Column(children: [
-            for (var i = 0; i < kids.length; i++) NodeTile(key: ValueKey(kids[i].id), p: kids[i], last: i == kids.length - 1),
-          ]),
-        ),
-      ],
-    );
-  }
-}
-
-class NodeTile extends StatefulWidget {
-  final Person p;
-  final bool last;
-  const NodeTile({super.key, required this.p, required this.last});
-  @override
-  State<NodeTile> createState() => _NodeTileState();
-}
-
-class _NodeTileState extends State<NodeTile> {
-  bool open = false;
-  static const double cardH = 68;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = widget.p;
-    final kids = app.children(p.id);
-    final c = app.colorOf(p);
-    final cs = Theme.of(context).colorScheme;
-    final rtl = Directionality.of(context) == TextDirection.rtl;
-    return IntrinsicHeight(
-      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        SizedBox(
-          width: 28,
-          child: CustomPaint(painter: _ElbowPainter(last: widget.last, rtl: rtl, color: cs.outlineVariant, midY: cardH / 2 + 12)),
-        ),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Column(children: [
-              Surface(
-                radius: 22,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                onTap: () => kids.isEmpty ? openPerson(context, p) : setState(() => open = !open),
-                onLongPress: () => openPerson(context, p),
-                child: SizedBox(
-                  height: cardH,
-                  child: Row(children: [
-                    Avatar(p, size: 46),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                        Text(kidsText(kids.length), style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
-                      ]),
-                    ),
-                    if (kids.isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(color: c.withAlpha(36), borderRadius: BorderRadius.circular(12)),
-                        child: Text(ar(kids.length), style: const TextStyle(fontWeight: FontWeight.w900)),
-                      ),
-                    if (kids.isNotEmpty)
-                      AnimatedRotation(
-                        turns: open ? .5 : 0,
-                        duration: const Duration(milliseconds: 220),
-                        child: Icon(Icons.expand_more_rounded, color: cs.onSurfaceVariant),
-                      ),
-                    IconButton(
-                      tooltip: 'بطاقة الفرد',
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(Icons.north_west_rounded, size: 20, color: cs.onSurfaceVariant),
-                      onPressed: () => openPerson(context, p),
-                    ),
-                  ]),
-                ),
-              ),
-              AnimatedSize(
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOutCubic,
-                alignment: Alignment.topCenter,
-                child: open && kids.isNotEmpty
-                    ? Padding(
-                        padding: const EdgeInsetsDirectional.only(start: 20),
-                        child: Column(children: [
-                          for (var i = 0; i < kids.length; i++) NodeTile(key: ValueKey(kids[i].id), p: kids[i], last: i == kids.length - 1),
-                        ]),
-                      )
-                    : const SizedBox(width: double.infinity, height: 0),
-              ),
-            ]),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-class _ElbowPainter extends CustomPainter {
-  final bool last, rtl;
-  final Color color;
-  final double midY;
-  _ElbowPainter({required this.last, required this.rtl, required this.color, required this.midY});
-  @override
-  void paint(Canvas canvas, Size s) {
-    final paint = Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 2.2..strokeCap = StrokeCap.round;
-    final x = rtl ? s.width - 14 : 14.0;
-    final dir = rtl ? -1.0 : 1.0;
-    final edge = rtl ? 0.0 : s.width;
-    const r = 14.0;
-    if (last) {
-      canvas.drawPath(
-        Path()
-          ..moveTo(x, 0)
-          ..lineTo(x, midY - r)
-          ..quadraticBezierTo(x, midY, x + dir * r, midY)
-          ..lineTo(edge, midY),
-        paint,
-      );
-    } else {
-      canvas.drawLine(Offset(x, 0), Offset(x, s.height), paint);
-      canvas.drawLine(Offset(x, midY), Offset(edge, midY), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ElbowPainter o) => o.last != last || o.color != color || o.rtl != rtl;
 }
 
 // ═════════════════════════ الشجرة الكاملة ═════════════════════════
@@ -1773,44 +1520,107 @@ Future<bool> loadPhotos() async {
 }
 
 /// تخطيط البطاقات العمودي: الجذر في الأعلى والأبناء تحته بخطوط متعامدة.
+/// تصميم الكبسولات: كل فرد كبسولة (صورة/حرف + اسم)، والزوج/ة بجانبه يصلهما خط،
+/// ومن منتصف هذا الخط تنزل خطوط منحنية إلى الأبناء.
+void drawCapsule(Canvas canvas, Rect r, String name, bool female, ui.Image? img,
+    {required Color fill, required Color ink, required Color dark, bool shadow = true}) {
+  final rr = RRect.fromRectAndRadius(r, Radius.circular(r.height / 2));
+  if (shadow) {
+    canvas.drawRRect(rr.shift(const Offset(0, 3)), Paint()..color = Colors.black.withAlpha(30)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
+  }
+  canvas.drawRRect(rr, Paint()..color = female ? dark : fill);
+  if (!female) canvas.drawRRect(rr, Paint()..color = ink.withAlpha(24)..style = PaintingStyle.stroke..strokeWidth = 1);
+  final d = r.height - 10;
+  final ac = Offset(r.right - 5 - d / 2, r.center.dy);
+  if (img != null) {
+    canvas.save();
+    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: ac, radius: d / 2)));
+    paintImage(canvas: canvas, rect: Rect.fromCircle(center: ac, radius: d / 2), image: img, fit: BoxFit.cover);
+    canvas.restore();
+  } else {
+    canvas.drawCircle(ac, d / 2, Paint()..color = female ? Colors.white : Color.alphaBlend(dark.withAlpha(46), fill));
+    final ini = TextPainter(
+      text: TextSpan(text: name.isEmpty ? '' : name.substring(0, 1), style: TextStyle(color: dark, fontSize: d * .44, fontWeight: FontWeight.w900)),
+      textDirection: TextDirection.rtl,
+    )..layout();
+    ini.paint(canvas, ac - Offset(ini.width / 2, ini.height / 2));
+  }
+  final tp = TextPainter(
+    text: TextSpan(text: name, style: TextStyle(color: female ? Colors.white : ink, fontSize: r.height >= 48 ? 15.5 : 13, fontWeight: FontWeight.w800)),
+    textDirection: TextDirection.rtl,
+    maxLines: 1,
+    ellipsis: '…',
+  )..layout(maxWidth: math.max(10.0, r.width - d - 24));
+  tp.paint(canvas, Offset(ac.dx - d / 2 - 10 - tp.width, r.center.dy - tp.height / 2));
+}
+
 class CardLayout implements TreeGeometry {
-  static const double cardW = 132, cardH = 138, gapX = 28, gapY = 76, margin = 44, avatarR = 34;
+  static const double pillW = 150, pillH = 52, coupleGap = 36, gapX = 28, gapY = 108, margin = 56;
   final Set<String> expanded;
   final bool all;
-  final Map<String, Offset> pos = {};
-  double _next = 0;
+  final Map<String, double> ux = {}; // يسار الوحدة (منطقياً)
+  final Map<String, int> dep = {};
+  final Map<String, double> sub = {};
   int maxDepth = 0;
+  double rootW = 0;
 
   CardLayout(this.expanded, {this.all = false}) {
-    _place(app.root, 0);
+    rootW = _measure(app.root);
+    _place(app.root, 0, 0);
   }
 
   bool isOpen(Person p) => all || p.parentId == null || expanded.contains(p.id);
+  List<Person> _kids(Person p) => isOpen(p) ? app.children(p.id) : <Person>[];
+  double unitW(Person p) => p.spouse.isNotEmpty ? 2 * pillW + coupleGap : pillW;
 
-  double _place(Person p, int depth) {
-    maxDepth = math.max(maxDepth, depth);
-    final kids = isOpen(p) ? app.children(p.id) : <Person>[];
-    double x;
-    if (kids.isEmpty) {
-      x = _next;
-      _next += 1;
-    } else {
-      final xs = [for (final k in kids) _place(k, depth + 1)];
-      x = (xs.first + xs.last) / 2;
+  double _kidsW(Person p) {
+    final ks = _kids(p);
+    var t = 0.0;
+    for (var i = 0; i < ks.length; i++) {
+      t += sub[ks[i].id]! + (i > 0 ? gapX : 0);
     }
-    pos[p.id] = Offset(x, depth.toDouble());
-    return x;
+    return t;
   }
 
-  double get slotW => cardW + gapX;
+  double _measure(Person p) {
+    for (final k in _kids(p)) {
+      _measure(k);
+    }
+    final w = math.max(unitW(p), _kidsW(p));
+    sub[p.id] = w;
+    return w;
+  }
+
+  void _place(Person p, double x0, int d) {
+    maxDepth = math.max(maxDepth, d);
+    dep[p.id] = d;
+    final w = sub[p.id]!;
+    ux[p.id] = x0 + (w - unitW(p)) / 2;
+    var kx = x0 + (w - _kidsW(p)) / 2;
+    for (final k in _kids(p)) {
+      _place(k, kx, d + 1);
+      kx += sub[k.id]! + gapX;
+    }
+  }
 
   @override
-  Size get size => Size(margin * 2 + _next * slotW - gapX, margin * 2 + (maxDepth + 1) * cardH + maxDepth * gapY);
+  Size get size => Size(margin * 2 + rootW, margin * 2 + (maxDepth + 1) * pillH + maxDepth * gapY);
 
-  Rect rect(Person p) {
-    final o = pos[p.id]!;
-    final sx = _next - 1 - o.dx; // الابن الأول على اليمين
-    return Rect.fromLTWH(margin + sx * slotW, margin + o.dy * (cardH + gapY), cardW, cardH);
+  double _top(Person p) => margin + dep[p.id]! * (pillH + gapY);
+
+  // الفرد على اليمين والزوج/ة على يساره (اتجاه عربي)
+  Rect rect(Person p) => Rect.fromLTWH(margin + rootW - (ux[p.id]! + pillW), _top(p), pillW, pillH);
+
+  Rect? spouseRect(Person p) {
+    if (p.spouse.isEmpty) return null;
+    final x = ux[p.id]! + pillW + coupleGap;
+    return Rect.fromLTWH(margin + rootW - (x + pillW), _top(p), pillW, pillH);
+  }
+
+  Offset junction(Person p) {
+    final r = rect(p), s = spouseRect(p);
+    if (s == null) return Offset(r.center.dx, r.bottom);
+    return Offset((r.left + s.right) / 2, r.center.dy);
   }
 
   Rect badgeRect(Person p) {
@@ -1821,13 +1631,14 @@ class CardLayout implements TreeGeometry {
   @override
   Offset get rootCenter => rect(app.root).center;
   @override
-  bool visible(Person p) => pos.containsKey(p.id);
+  bool visible(Person p) => ux.containsKey(p.id);
 
   @override
   Person? hit(Offset o) {
     for (final p in app.people) {
       if (!visible(p)) continue;
-      if (rect(p).inflate(2).contains(o) || (p.parentId != null && app.children(p.id).isNotEmpty && badgeRect(p).contains(o))) return p;
+      final s = spouseRect(p);
+      if (rect(p).inflate(2).contains(o) || (s != null && s.inflate(2).contains(o)) || (p.parentId != null && app.children(p.id).isNotEmpty && badgeRect(p).contains(o))) return p;
     }
     return null;
   }
@@ -1836,86 +1647,65 @@ class CardLayout implements TreeGeometry {
   bool toggleHit(Offset o, Person p) => p.parentId != null && app.children(p.id).isNotEmpty && badgeRect(p).contains(o);
 
   @override
-  CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true}) => _CardPainter(this, fill, text, dot);
+  CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true}) => _CardPainter(this, fill, text, dot, dots: dots);
 }
 
 class _CardPainter extends CustomPainter {
   final CardLayout L;
   final Color fill, text, line;
-  _CardPainter(this.L, this.fill, this.text, this.line);
-
-
-  void _icon(Canvas c, IconData icon, Offset center, double size, Color color) {
-    final tp = TextPainter(
-      text: TextSpan(text: String.fromCharCode(icon.codePoint), style: TextStyle(fontSize: size, fontFamily: icon.fontFamily, package: icon.fontPackage, color: color)),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(c, center - Offset(tp.width / 2, tp.height / 2));
-  }
+  final bool dots;
+  _CardPainter(this.L, this.fill, this.text, this.line, {this.dots = true});
 
   @override
   void paint(Canvas canvas, Size s) {
+    final night = fill.computeLuminance() < .5;
+    final dk = Color.lerp(app.primary, Colors.black, night ? .12 : .38)!;
+    if (dots) {
+      final pts = <Offset>[];
+      for (double x = -1200; x < s.width + 1200; x += 30) {
+        for (double y = -1200; y < s.height + 1200; y += 30) {
+          pts.add(Offset(x, y));
+        }
+      }
+      canvas.drawPoints(ui.PointMode.points, pts, Paint()..color = line.withAlpha(120)..strokeWidth = 3..strokeCap = StrokeCap.round);
+    }
+    final lp = Paint()
+      ..color = Color.alphaBlend(app.primary.withAlpha(120), line)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round;
     final vis = [for (final p in app.people) if (L.visible(p)) p];
     for (final p in vis) {
-      if (p.parentId == null) continue;
-      final a = L.rect(app.byId(p.parentId!)!), b = L.rect(p);
-      final sx = a.center.dx, sy = a.bottom, ex = b.center.dx, ey = b.top;
-      final my = sy + CardLayout.gapY * .5;
-      final path = Path()..moveTo(sx, sy);
-      if ((ex - sx).abs() < 1) {
-        path.lineTo(ex, ey);
-      } else {
-        path.cubicTo(sx, my, ex, my, ex, ey);
+      final r = L.rect(p), sr = L.spouseRect(p);
+      if (sr != null) canvas.drawLine(Offset(r.left, r.center.dy), Offset(sr.right, r.center.dy), lp);
+      final j = L.junction(p);
+      for (final k in app.children(p.id)) {
+        if (!L.visible(k)) continue;
+        final kr = L.rect(k);
+        final ex = kr.center.dx, ey = kr.top;
+        final my = j.dy + (ey - j.dy) * .5;
+        final path = Path()..moveTo(j.dx, j.dy);
+        if ((ex - j.dx).abs() < 1) {
+          path.lineTo(ex, ey);
+        } else {
+          path.cubicTo(j.dx, my, ex, my, ex, ey);
+        }
+        canvas.drawPath(path, lp);
       }
-      canvas.drawPath(path, Paint()..color = Color.alphaBlend(app.primary.withAlpha(150), line)..style = PaintingStyle.stroke..strokeWidth = 1.7..strokeCap = StrokeCap.round);
     }
     for (final p in vis) {
       final r = L.rect(p);
-      final isRoot = p.parentId == null;
-      final c = app.colorOf(p);
-      final rr = RRect.fromRectAndRadius(r, const Radius.circular(22));
-      if (isRoot) {
-        canvas.drawRRect(rr.inflate(6), Paint()..color = c.withAlpha(48)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
-      }
-      canvas.drawRRect(rr.shift(const Offset(0, 4)), Paint()..color = Colors.black.withAlpha(26)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 9));
-      canvas.drawRRect(rr, Paint()..color = isRoot ? Color.alphaBlend(c.withAlpha(34), fill) : fill);
-      canvas.drawRRect(rr, Paint()..color = isRoot ? c : line.withAlpha(110)..style = PaintingStyle.stroke..strokeWidth = isRoot ? 3 : 1.2);
-
-      final ac = Offset(r.center.dx, r.top + 20 + CardLayout.avatarR);
-      final female = p.female;
-      final tint = female ? const Color(0xFFFDEAF3) : const Color(0xFFE8F1FE);
-      final edge = female ? const Color(0xFFF4B9D4) : const Color(0xFFBCD6F6);
-      final ico = female ? const Color(0xFFD6408E) : const Color(0xFF3B7DDD);
-      final img = photoImages[photoKey(p)];
-      if (img != null) {
-        canvas.save();
-        canvas.clipPath(Path()..addOval(Rect.fromCircle(center: ac, radius: CardLayout.avatarR)));
-        paintImage(canvas: canvas, rect: Rect.fromCircle(center: ac, radius: CardLayout.avatarR), image: img, fit: BoxFit.cover);
-        canvas.restore();
-      } else {
-        canvas.drawCircle(ac, CardLayout.avatarR, Paint()..color = tint);
-        _icon(canvas, Icons.person_outline_rounded, ac, 38, ico);
-      }
-      canvas.drawCircle(ac, CardLayout.avatarR, Paint()..color = edge..style = PaintingStyle.stroke..strokeWidth = 1.6);
-
-      final tp = TextPainter(
-        text: TextSpan(text: p.name, style: TextStyle(color: text, fontSize: 14, fontWeight: FontWeight.w800, height: 1.25)),
-        textAlign: TextAlign.center,
-        textDirection: TextDirection.rtl,
-        maxLines: 2,
-        ellipsis: '…',
-      )..layout(maxWidth: CardLayout.cardW - 16);
-      final top = r.top + 20 + 2 * CardLayout.avatarR + 6;
-      tp.paint(canvas, Offset(r.center.dx - tp.width / 2, top + (r.bottom - 8 - top - tp.height) / 2));
-
+      drawCapsule(canvas, r, p.name, p.female, photoImages[photoKey(p)], fill: fill, ink: text, dark: dk);
+      final sr = L.spouseRect(p);
+      if (sr != null) drawCapsule(canvas, sr, p.spouse, !p.female, null, fill: fill, ink: text, dark: dk);
       final n = app.children(p.id).length;
-      if (!isRoot && n > 0 && !L.all) {
+      if (p.parentId != null && n > 0 && !L.all) {
         final open = L.isOpen(p);
         final bc = Offset(r.center.dx, r.bottom);
-        canvas.drawCircle(bc, 12, Paint()..color = open ? fill : c);
-        canvas.drawCircle(bc, 12, Paint()..color = c..style = PaintingStyle.stroke..strokeWidth = 2);
+        canvas.drawCircle(bc, 12, Paint()..color = open ? fill : dk);
+        canvas.drawCircle(bc, 12, Paint()..color = dk..style = PaintingStyle.stroke..strokeWidth = 2);
         final bt = TextPainter(
-          text: TextSpan(text: open ? '−' : '+${ar(n)}', style: TextStyle(color: open ? c : onColor(c), fontSize: open ? 16 : 10, fontWeight: FontWeight.w900)),
+          text: TextSpan(text: open ? '−' : '+${ar(n)}', style: TextStyle(color: open ? dk : Colors.white, fontSize: open ? 16 : 10, fontWeight: FontWeight.w900)),
           textDirection: TextDirection.rtl,
         )..layout();
         bt.paint(canvas, bc - Offset(bt.width / 2, bt.height / 2));
@@ -1935,13 +1725,14 @@ class _PBox {
   final Person p;
   final List<_PBox> kids = [];
   bool hang = false; // الأبناء الأخيرون يُعرضون معلّقين تحت أبيهم
-  double w = 0, h = 0, cx = 0, cy = 0;
+  double w = 0, h = 0, cx = 0, cy = 0; // cx: يسار الوحدة (منطقياً)
   _PBox(this.p);
 }
 
 class _PdfTree {
-  static const double cardW = 132, cardH = 138, gapX = 26, gapY = 64;
-  static const double pillW = 128, pillH = 38, pillGap = 8, hangGap = 20, hangIndent = 22, trunkX = 10;
+  static const double cardW = 150, cardH = 52, gapX = 26, gapY = 76, coupleGap = 36;
+  static const double pillW = 128, pillH = 38, pillGap = 8, hangGap = 24, hangIndent = 22, trunkX = 12;
+  static const Color ink = Color(0xFF14181A);
   late final _PBox root;
   double bw = 0, bh = 0;
 
@@ -1964,23 +1755,25 @@ class _PdfTree {
     return b;
   }
 
+  double _unit(_PBox b) => b.p.spouse.isNotEmpty ? 2 * cardW + coupleGap : cardW;
+  double _kw(_PBox b) => b.kids.fold<double>(0, (a, k) => a + k.w) + gapX * math.max(0, b.kids.length - 1);
+
   void _measure(_PBox b) {
     for (final k in b.kids) {
       _measure(k);
     }
     if (b.kids.isEmpty) {
-      b.w = cardW;
+      b.w = _unit(b);
       b.h = cardH;
     } else if (b.hang) {
-      b.w = math.max(cardW, hangIndent + pillW);
+      b.w = math.max(_unit(b), hangIndent + pillW);
       b.h = cardH + hangGap + b.kids.length * (pillH + pillGap) - pillGap;
     } else {
-      var tw = 0.0, mh = 0.0;
-      for (var i = 0; i < b.kids.length; i++) {
-        tw += b.kids[i].w + (i > 0 ? gapX : 0);
-        mh = math.max(mh, b.kids[i].h);
+      var mh = 0.0;
+      for (final k in b.kids) {
+        mh = math.max(mh, k.h);
       }
-      b.w = math.max(cardW, tw);
+      b.w = math.max(_unit(b), _kw(b));
       b.h = cardH + gapY + mh;
     }
   }
@@ -1991,13 +1784,12 @@ class _PdfTree {
       b.cx = x;
       return;
     }
-    var kx = x;
+    var kx = x + (b.w - _kw(b)) / 2;
     for (final k in b.kids) {
       _place(k, kx, y + cardH + gapY);
       kx += k.w + gapX;
     }
-    final mid = ((b.kids.first.cx + cardW / 2) + (b.kids.last.cx + cardW / 2)) / 2;
-    b.cx = mid - cardW / 2;
+    b.cx = x + (b.w - _unit(b)) / 2;
   }
 
   // العرض من اليمين لليسار: نعكس المواضع أفقياً مع إبقاء النصوص سليمة
@@ -2006,116 +1798,64 @@ class _PdfTree {
 
   void draw(Canvas c) {
     final line = Paint()
-      ..color = Color.alphaBlend(app.primary.withAlpha(150), const Color(0xFFD9D2C8))
+      ..color = Color.alphaBlend(app.primary.withAlpha(120), const Color(0xFFD5D9D2))
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8
+      ..strokeWidth = 2.2
       ..strokeCap = StrokeCap.round;
     _lines(root, c, line);
-    _cards(root, c, true);
+    _cards(root, c);
   }
 
   void _lines(_PBox b, Canvas c, Paint line) {
-    final pcx = b.cx + cardW / 2, pcy = b.cy + cardH;
+    final hasS = b.p.spouse.isNotEmpty;
+    final midY = b.cy + cardH / 2;
+    if (hasS) c.drawLine(Offset(_mx(b.cx + cardW), midY), Offset(_mx(b.cx + cardW + coupleGap), midY), line);
+    final bottom = b.cy + cardH;
     if (b.hang) {
       final tx = _mx(b.cx + trunkX);
-      final firstY = pcy + hangGap + pillH / 2;
-      final lastY = pcy + hangGap + (b.kids.length - 1) * (pillH + pillGap) + pillH / 2;
-      c.drawLine(Offset(tx, pcy), Offset(tx, lastY), line);
+      final firstY = bottom + hangGap + pillH / 2;
+      final lastY = bottom + hangGap + (b.kids.length - 1) * (pillH + pillGap) + pillH / 2;
+      c.drawLine(Offset(tx, bottom), Offset(tx, lastY), line);
       for (var i = 0; i < b.kids.length; i++) {
         final py = firstY + i * (pillH + pillGap);
         c.drawLine(Offset(tx, py), Offset(_mx(b.cx + hangIndent), py), line);
       }
       return;
     }
+    final jx = hasS ? _mx(b.cx + cardW + coupleGap / 2) : _mx(b.cx + cardW / 2);
+    final jy = hasS ? midY : bottom;
     for (final k in b.kids) {
-      final sx = _mx(pcx), ex = _mx(k.cx + cardW / 2), ey = k.cy;
-      final my = pcy + gapY * .5;
-      final path = Path()..moveTo(sx, pcy);
-      if ((ex - sx).abs() < 1) {
+      final ex = _mx(k.cx + cardW / 2), ey = k.cy;
+      final my = jy + (ey - jy) * .5;
+      final path = Path()..moveTo(jx, jy);
+      if ((ex - jx).abs() < 1) {
         path.lineTo(ex, ey);
       } else {
-        path.cubicTo(sx, my, ex, my, ex, ey);
+        path.cubicTo(jx, my, ex, my, ex, ey);
       }
       c.drawPath(path, line);
       _lines(k, c, line);
     }
   }
 
-  void _cards(_PBox b, Canvas c, bool top) {
-    _pdfCard(c, _mr(b.cx, b.cy, cardW, cardH), b.p, top);
+  void _cards(_PBox b, Canvas c) {
+    final dk = Color.lerp(app.primary, Colors.black, .38)!;
+    drawCapsule(c, _mr(b.cx, b.cy, cardW, cardH), b.p.name, b.p.female, photoImages[photoKey(b.p)], fill: Colors.white, ink: ink, dark: dk);
+    if (b.p.spouse.isNotEmpty) {
+      drawCapsule(c, _mr(b.cx + cardW + coupleGap, b.cy, cardW, cardH), b.p.spouse, !b.p.female, null, fill: Colors.white, ink: ink, dark: dk);
+    }
     if (b.hang) {
       for (var i = 0; i < b.kids.length; i++) {
-        _pdfPill(c, _mr(b.cx + hangIndent, b.cy + cardH + hangGap + i * (pillH + pillGap), pillW, pillH), b.kids[i].p);
+        final k = b.kids[i].p;
+        drawCapsule(c, _mr(b.cx + hangIndent, b.cy + cardH + hangGap + i * (pillH + pillGap), pillW, pillH), k.name, k.female, photoImages[photoKey(k)],
+            fill: Colors.white, ink: ink, dark: dk);
       }
     } else {
       for (final k in b.kids) {
-        _cards(k, c, false);
+        _cards(k, c);
       }
     }
   }
-}
-
-void _iconAt(Canvas c, IconData icon, Offset center, double size, Color color) {
-  final tp = TextPainter(
-    text: TextSpan(text: String.fromCharCode(icon.codePoint), style: TextStyle(fontSize: size, fontFamily: icon.fontFamily, package: icon.fontPackage, color: color)),
-    textDirection: TextDirection.ltr,
-  )..layout();
-  tp.paint(c, center - Offset(tp.width / 2, tp.height / 2));
-}
-
-void _avatarAt(Canvas canvas, Person p, Offset ac, double r, double iconSize) {
-  final f = p.female;
-  final tint = f ? const Color(0xFFFDEAF3) : const Color(0xFFE8F1FE);
-  final edge = f ? const Color(0xFFF4B9D4) : const Color(0xFFBCD6F6);
-  final ico = f ? const Color(0xFFD6408E) : const Color(0xFF3B7DDD);
-  final img = photoImages[photoKey(p)];
-  if (img != null) {
-    canvas.save();
-    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: ac, radius: r)));
-    paintImage(canvas: canvas, rect: Rect.fromCircle(center: ac, radius: r), image: img, fit: BoxFit.cover);
-    canvas.restore();
-  } else {
-    canvas.drawCircle(ac, r, Paint()..color = tint);
-    _iconAt(canvas, Icons.person_outline_rounded, ac, iconSize, ico);
-  }
-  canvas.drawCircle(ac, r, Paint()..color = edge..style = PaintingStyle.stroke..strokeWidth = 1.6);
-}
-
-void _pdfCard(Canvas canvas, Rect r, Person p, bool top) {
-  const ink = Color(0xFF14181A), lineC = Color(0xFFD5D9D2);
-  final c = app.primary;
-  final rr = RRect.fromRectAndRadius(r, const Radius.circular(22));
-  if (top) canvas.drawRRect(rr.inflate(6), Paint()..color = c.withAlpha(48)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7));
-  canvas.drawRRect(rr.shift(const Offset(0, 4)), Paint()..color = Colors.black.withAlpha(26)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 9));
-  canvas.drawRRect(rr, Paint()..color = top ? Color.alphaBlend(c.withAlpha(34), Colors.white) : Colors.white);
-  canvas.drawRRect(rr, Paint()..color = top ? c : lineC..style = PaintingStyle.stroke..strokeWidth = top ? 3 : 1.2);
-  final ac = Offset(r.center.dx, r.top + 20 + CardLayout.avatarR);
-  _avatarAt(canvas, p, ac, CardLayout.avatarR, 38);
-  final tp = TextPainter(
-    text: TextSpan(text: p.name, style: const TextStyle(color: ink, fontSize: 14, fontWeight: FontWeight.w800, height: 1.25)),
-    textAlign: TextAlign.center,
-    textDirection: TextDirection.rtl,
-    maxLines: 2,
-    ellipsis: '…',
-  )..layout(maxWidth: r.width - 16);
-  final ty = r.top + 20 + 2 * CardLayout.avatarR + 6;
-  tp.paint(canvas, Offset(r.center.dx - tp.width / 2, ty + (r.bottom - 8 - ty - tp.height) / 2));
-}
-
-void _pdfPill(Canvas canvas, Rect r, Person p) {
-  const ink = Color(0xFF14181A), lineC = Color(0xFFD5D9D2);
-  final rr = RRect.fromRectAndRadius(r, const Radius.circular(16));
-  canvas.drawRRect(rr.shift(const Offset(0, 2)), Paint()..color = Colors.black.withAlpha(22)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
-  canvas.drawRRect(rr, Paint()..color = Colors.white);
-  canvas.drawRRect(rr, Paint()..color = lineC..style = PaintingStyle.stroke..strokeWidth = 1.2);
-  _avatarAt(canvas, p, Offset(r.right - 19, r.center.dy), 14, 19);
-  final tp = TextPainter(
-    text: TextSpan(text: p.name, style: const TextStyle(color: ink, fontSize: 13.5, fontWeight: FontWeight.w800)),
-    textDirection: TextDirection.rtl,
-    maxLines: 1,
-    ellipsis: '…',
-  )..layout(maxWidth: r.width - 46);
-  tp.paint(canvas, Offset(r.right - 40 - tp.width, r.center.dy - tp.height / 2));
 }
 
 Future<Uint8List> buildFamilyPdf() async {
@@ -2299,7 +2039,7 @@ class _TreeCanvasState extends State<TreeCanvas> {
 
   bool get _allOpen => app.people.where((p) => p.parentId != null && app.children(p.id).isNotEmpty).every((p) => expanded.contains(p.id));
 
-  int _sig() => Object.hashAll([for (final p in app.people) Object.hash(p.id, p.name, p.parentId, p.photo.length, p.female)]);
+  int _sig() => Object.hashAll([for (final p in app.people) Object.hash(p.id, p.name, p.parentId, p.photo.length, p.female, p.spouse)]);
 
   @override
   void initState() {
@@ -2334,7 +2074,7 @@ class _TreeCanvasState extends State<TreeCanvas> {
     if (!mounted || _vp.isEmpty) return;
     final rc = geo.rootCenter;
     if (mode == 0) {
-      const sc = .7;
+      const sc = .75;
       tc.value = Matrix4.identity()
         ..translate(_vp.width / 2 - rc.dx * sc, 90 - rc.dy * sc)
         ..scale(sc, sc, 1.0);
@@ -2499,22 +2239,31 @@ class _TreeCanvasState extends State<TreeCanvas> {
             ),
           ),
         ),
-        // أدوات التكبير
+        // أدوات التكبير (كبسولة أسفل اليسار)
         Positioned(
           left: 12,
-          top: 12,
-          child: Column(children: [
-            _roundBtn(context, Icons.zoom_in_rounded, 'تكبير', () => _zoom(1.25)),
-            const SizedBox(height: 8),
-            _roundBtn(context, Icons.zoom_out_rounded, 'تصغير', () => _zoom(.8)),
-            const SizedBox(height: 8),
-            _roundBtn(context, Icons.open_in_full_rounded, 'إعادة الضبط', _reset),
-            const SizedBox(height: 6),
-            AnimatedBuilder(
-              animation: tc,
-              builder: (_, __) => Text('${ar((tc.value.getMaxScaleOnAxis() * 100).round())}٪', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, fontWeight: FontWeight.w700)),
+          bottom: 12,
+          child: Material(
+            color: Theme.of(context).brightness == Brightness.light ? Colors.white : cs.surfaceContainerHigh,
+            elevation: 3,
+            shadowColor: Colors.black54,
+            shape: const StadiumBorder(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                IconButton(tooltip: 'إعادة الضبط', icon: const Icon(Icons.my_location_rounded), onPressed: () { HapticFeedback.selectionClick(); _reset(); }),
+                IconButton(tooltip: 'تكبير', icon: const Icon(Icons.add_rounded, size: 28), onPressed: () { HapticFeedback.selectionClick(); _zoom(1.25); }),
+                IconButton(tooltip: 'تصغير', icon: const Icon(Icons.remove_rounded, size: 28), onPressed: () { HapticFeedback.selectionClick(); _zoom(.8); }),
+                AnimatedBuilder(
+                  animation: tc,
+                  builder: (_, __) => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('${ar((tc.value.getMaxScaleOnAxis() * 100).round())}٪', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ]),
             ),
-          ]),
+          ),
         ),
         // أدوات الشكل و PDF
         Positioned(
@@ -2550,16 +2299,16 @@ class _TreeCanvasState extends State<TreeCanvas> {
           ]),
         ),
         Positioned(
-          bottom: 10,
-          left: 0,
-          right: 0,
+          bottom: 76,
+          left: 12,
+          right: 12,
           child: IgnorePointer(
             child: Center(
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(color: cs.surfaceContainerHigh.withAlpha(230), borderRadius: BorderRadius.circular(20)),
                 child: Text(
-                  mode == 0 ? 'اضغط البطاقة لفتحها · الدائرة أسفلها تفتح الفرع أو تطويه' : 'اضغط الفرع لفتحه أو طيّه · اضغط مطولاً لفتح البطاقة',
+                  mode == 0 ? 'اضغط الاسم لفتح البطاقة · الدائرة أسفله تفتح الفرع أو تطويه' : 'اضغط الفرع لفتحه أو طيّه · اضغط مطولاً لفتح البطاقة',
                   style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                 ),
               ),
