@@ -1133,17 +1133,7 @@ class HomeScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, kNavPad),
           children: [
-            Reveal(i: 0, child: Row(children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(DateTime.now().hour < 12 ? 'صباح الخير' : 'مساء الخير', style: TextStyle(color: cs.onSurfaceVariant)),
-                  Text(app.userName, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
-                ]),
-              ),
-              GestureDetector(onTap: () => app.update(() => app.tab = 3), child: Avatar(app.root, size: 50)),
-            ])),
-            const SizedBox(height: 18),
-            Reveal(i: 1, child: Container(
+            Reveal(i: 0, child: Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(colors: [app.primary, dark], begin: Alignment.topRight, end: Alignment.bottomLeft),
                 borderRadius: BorderRadius.circular(32),
@@ -3400,26 +3390,6 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _editName(BuildContext context) async {
-    final ctl = TextEditingController(text: app.userName);
-    await showSheet<void>(
-      context,
-      (c) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('اسم المستخدم', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
-        const SizedBox(height: 16),
-        TextField(controller: ctl, autofocus: true, decoration: deco(c, 'الاسم')),
-        const SizedBox(height: 20),
-        FilledButton(
-          onPressed: () {
-            if (ctl.text.trim().isNotEmpty) app.update(() => app.userName = ctl.text.trim());
-            Navigator.pop(c);
-          },
-          child: const Text('حفظ'),
-        ),
-      ]),
-    );
-  }
-
   Future<void> _backup(BuildContext context) async {
     try {
       final d = DateTime.now();
@@ -3475,20 +3445,6 @@ class SettingsScreen extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 0, 20, kNavPad),
           children: [
             const PageHeader('الإعدادات'),
-            Surface(
-              onTap: () => _editName(context),
-              child: Row(children: [
-                Avatar(app.root, size: 60),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(app.userName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-                    Text('اضغط لتعديل الاسم', style: TextStyle(color: cs.onSurfaceVariant)),
-                  ]),
-                ),
-                Icon(Icons.edit_outlined, color: cs.onSurfaceVariant),
-              ]),
-            ),
             const SectionTitle('المظهر'),
             Surface(
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
