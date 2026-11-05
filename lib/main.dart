@@ -322,7 +322,7 @@ class AppState extends ChangeNotifier {
     final ps = [for (final x in (j['people'] as List? ?? [])) Person.fromJson(x as Map<String, dynamic>)];
     themeMode = j['themeMode'] as int? ?? themeMode;
     accent = j['accent'] as int? ?? accent;
-    textScale = (j['textScale'] as num?)?.toDouble() ?? textScale;
+    textScale = 1.0;
     userName = j['userName'] as String? ?? userName;
     if (ps.isEmpty || !ps.any((p) => p.parentId == null)) return false;
     people..clear()..addAll(ps);
@@ -334,7 +334,7 @@ class AppState extends ChangeNotifier {
     started = j['started'] as bool? ?? started;
     themeMode = j['themeMode'] as int? ?? 0;
     accent = j['accent'] as int? ?? 0;
-    textScale = (j['textScale'] as num?)?.toDouble() ?? 1.0;
+    textScale = 1.0;
     userName = j['userName'] as String? ?? 'المستخدم';
     _n = (j['n'] as int?) ?? people.length + 1;
     _e = (j['e'] as int?) ?? events.length + 1;
@@ -958,68 +958,104 @@ class _StartScreenState extends State<StartScreen> with SingleTickerProviderStat
             stops: const [0, .65],
           ),
         ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-            child: Column(children: [
-              Expanded(
-                flex: 5,
-                child: RepaintBoundary(
-                  child: CustomPaint(size: Size.infinite, painter: _HeroPainter(ctl, app.primary, cs.surface)),
+        child: Stack(children: [
+          Positioned(top: -90, right: -70, child: _glow(280, app.primary.withAlpha(46))),
+          Positioned(bottom: 100, left: -120, child: _glow(320, cs.tertiary.withAlpha(34))),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+              child: Column(children: [
+                Expanded(
+                  flex: 5,
+                  child: Center(
+                    child: Reveal(
+                      i: 0,
+                      child: AnimatedBuilder(
+                        animation: ctl,
+                        builder: (_, child) => Transform.translate(offset: Offset(0, math.sin(ctl.value * 2 * math.pi) * 5), child: child),
+                        child: Container(
+                          constraints: const BoxConstraints(maxWidth: 300, maxHeight: 300),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(44),
+                            boxShadow: [BoxShadow(color: Colors.black.withAlpha(34), blurRadius: 34, offset: const Offset(0, 14))],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(44),
+                            child: Image.asset('assets/logo.jpg', fit: BoxFit.contain),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-              const Text('شجرة العائلة', style: TextStyle(fontSize: 38, fontWeight: FontWeight.w900)),
-              const SizedBox(height: 10),
-              Text(
-                'اجمع أفراد عائلتك وفروعها في مكان واحد، وتعرّف على صلة القرابة بينهم.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 16, height: 1.7, color: cs.onSurfaceVariant),
-              ),
-              const SizedBox(height: 28),
-              SizedBox(width: double.infinity, child: FilledButton(onPressed: _go, child: const Text('تسجيل الدخول'))),
-              const SizedBox(height: 12),
-              SizedBox(width: double.infinity, child: OutlinedButton(onPressed: _create, child: const Text('إنشاء شجرة جديدة'))),
-            ]),
+                const SizedBox(height: 18),
+                Reveal(i: 1, child: const Text('شجرة العائلة', style: TextStyle(fontSize: 38, fontWeight: FontWeight.w900))),
+                const SizedBox(height: 10),
+                Reveal(
+                  i: 2,
+                  child: Text(
+                    'اجمع أفراد عائلتك وفروعها في مكان واحد، وتعرّف على صلة القرابة بينهم.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, height: 1.7, color: cs.onSurfaceVariant),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Reveal(
+                  i: 3,
+                  child: const Wrap(alignment: WrapAlignment.center, spacing: 8, runSpacing: 8, children: [
+                    _FeatureChip(Icons.account_tree_rounded, 'شجرة تفاعلية'),
+                    _FeatureChip(Icons.diversity_3_rounded, 'صلة القرابة'),
+                    _FeatureChip(Icons.lock_outline_rounded, 'بياناتك على جهازك'),
+                  ]),
+                ),
+                const SizedBox(height: 26),
+                Reveal(
+                  i: 4,
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _go,
+                      iconAlignment: IconAlignment.end,
+                      icon: const Icon(Icons.arrow_forward_rounded),
+                      label: Text(app.hasTree ? 'متابعة' : 'ابدأ'),
+                    ),
+                  ),
+                ),
+              ]),
+            ),
           ),
-        ),
+        ]),
       ),
     );
   }
+
+  Widget _glow(double d, Color c) => IgnorePointer(
+        child: Container(width: d, height: d, decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [c, Colors.transparent]))),
+      );
 }
 
-class _HeroPainter extends CustomPainter {
-  final Animation<double> t;
-  final Color primary, surface;
-  _HeroPainter(this.t, this.primary, this.surface) : super(repaint: t);
-
+class _FeatureChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _FeatureChip(this.icon, this.label);
   @override
-  void paint(Canvas canvas, Size s) {
-    final c = Offset(s.width / 2, s.height / 2);
-    final m = math.min(s.width, s.height);
-    final time = t.value * 2 * math.pi;
-    canvas.drawCircle(c, m * .34, Paint()..color = primary.withAlpha(55)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 42));
-    for (var i = 0; i < 6; i++) {
-      final col = AppState.branchColors[i];
-      final a = i * 2 * math.pi / 6 + time * .5;
-      final r = m * .25 + math.sin(time * 2 + i) * 5;
-      final pos = c + Offset(math.cos(a) * r, math.sin(a) * r);
-      final a2 = a + .32 * math.sin(time + i);
-      final r2 = m * .44 + math.sin(time * 3 + i) * 5;
-      final pos2 = c + Offset(math.cos(a2) * r2, math.sin(a2) * r2);
-      final line = Paint()..color = col..style = PaintingStyle.stroke..strokeWidth = 3.5..strokeCap = StrokeCap.round;
-      canvas.drawLine(c, pos, line);
-      canvas.drawLine(pos, pos2, line..strokeWidth = 2.5);
-      canvas.drawCircle(pos2, 11, Paint()..color = col);
-      canvas.drawCircle(pos, 22, Paint()..color = surface);
-      canvas.drawCircle(pos, 22, Paint()..color = col..style = PaintingStyle.stroke..strokeWidth = 4.5);
-    }
-    canvas.drawCircle(c, 40, Paint()..color = primary);
-    canvas.drawCircle(c, 40, Paint()..color = Colors.white.withAlpha(90)..style = PaintingStyle.stroke..strokeWidth = 6);
-    canvas.drawCircle(c, 12, Paint()..color = Colors.white);
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final light = Theme.of(context).brightness == Brightness.light;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: light ? Colors.white.withAlpha(200) : cs.surfaceContainerHigh.withAlpha(200),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cs.outlineVariant.withAlpha(110)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 16, color: cs.primary),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+      ]),
+    );
   }
-
-  @override
-  bool shouldRepaint(covariant _HeroPainter old) => old.primary != primary || old.surface != surface;
 }
 
 // ═════════════════════════ الهيكل ═════════════════════════
@@ -3337,30 +3373,10 @@ class SettingsScreen extends StatelessWidget {
                       ),
                     ),
                 ]),
-                const SizedBox(height: 18),
-                const Text('حجم الخط', style: TextStyle(fontWeight: FontWeight.w800)),
-                Row(children: [
-                  const Text('أ', style: TextStyle(fontSize: 13)),
-                  Expanded(
-                    child: Slider(
-                      min: .85,
-                      max: 1.3,
-                      divisions: 9,
-                      value: app.textScale.clamp(.85, 1.3).toDouble(),
-                      label: '${(app.textScale * 100).round()}٪',
-                      onChanged: (v) => app.update(() => app.textScale = v),
-                    ),
-                  ),
-                  const Text('أ', style: TextStyle(fontSize: 22)),
-                ]),
               ]),
             ),
             const SectionTitle('الشجرة والبيانات'),
             _group(context, [
-              _Tile(Icons.group_add_outlined, 'دعوة أفراد العائلة', 'نسخ نص الدعوة', () {
-                Clipboard.setData(ClipboardData(text: 'انضم إلى ${app.treeTitle}'));
-                toast(context, 'تم نسخ نص الدعوة');
-              }),
               _Tile(Icons.cloud_upload_outlined, 'نسخة احتياطية', 'حفظ ملف النسخة في هاتفك', () => _backup(context)),
               _Tile(Icons.cloud_download_outlined, 'استعادة نسخة', 'اختيار ملف النسخة من هاتفك', () => _restore(context)),
               _Tile(Icons.restart_alt_rounded, 'حذف كل البيانات', 'حذف الشجرة والبدء من جديد', () async {
