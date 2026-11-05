@@ -2168,6 +2168,152 @@ Future<Uint8List> buildFamilyPdf() async {
   return doc.save();
 }
 
+TextPainter _mmText(String name, int d, Color color) => TextPainter(
+      text: TextSpan(text: name, style: TextStyle(color: color, fontSize: d == 1 ? 17 : 14.5, fontWeight: d == 1 ? FontWeight.w900 : FontWeight.w700)),
+      textDirection: TextDirection.rtl,
+      maxLines: 1,
+      ellipsis: '…',
+    )..layout(maxWidth: 210);
+
+/// تصميم متفرع (خريطة ذهنية): الجذر في الوسط، لكل فرع لونه وسماكته،
+/// والأسماء مكتوبة فوق خطوط منحنية، وكل فرع في نطاقه فلا تختلط الفروع.
+class MindMapLayout implements TreeGeometry {
+  static const double rootW = 136, rootH = 46, margin = 56, gapRoot = 74, gapX = 44, k = .72;
+  final Set<String> expanded;
+  final bool all;
+  late final TreeLayout base;
+  final Map<String, double> tw = {};
+  final Map<int, double> colW = {};
+  final Map<int, double> colIn = {};
+  double halfW = 0;
+
+  MindMapLayout(this.expanded, {this.all = false}) {
+    base = TreeLayout(expanded, all: all);
+    for (final p in app.people) {
+      if (p.parentId == null || !base.visible(p)) continue;
+      final d = base.pos[p.id]!.dx.abs().round();
+      final w = _mmText(p.name, d, Colors.black).width + 24;
+      tw[p.id] = w;
+      colW[d] = math.max(colW[d] ?? 0, w);
+    }
+    var x = rootW / 2 + gapRoot;
+    final maxD = colW.keys.fold<int>(0, math.max);
+    for (var d = 1; d <= maxD; d++) {
+      colIn[d] = x;
+      x += (colW[d] ?? 0) + gapX;
+    }
+    halfW = math.max(x - gapX, rootW / 2 + 60) + margin;
+  }
+
+  bool isOpen(Person p) => all || expanded.contains(p.id);
+  int depthOf(Person p) => base.pos[p.id]!.dx.abs().round();
+  int sideOf(Person p) => base.side[p.id]!;
+
+  @override
+  Size get size => Size(halfW * 2, base.bodyH * k + margin * 2);
+  Offset get center => Offset(halfW, margin + (base.pos[app.root.id]!.dy + TreeLayout.rowH / 2) * k);
+  @override
+  Offset get rootCenter => center;
+  @override
+  bool visible(Person p) => p.parentId == null || base.visible(p);
+
+  double lineY(Person p) => margin + (base.pos[p.id]!.dy + TreeLayout.rowH / 2) * k + 8;
+  double inX(Person p) => halfW + sideOf(p) * colIn[depthOf(p)]!;
+  double outX(Person p) => inX(p) + sideOf(p) * tw[p.id]!;
+
+  Rect textRect(Person p) {
+    final a = inX(p), b = outX(p), y = lineY(p);
+    return Rect.fromLTRB(math.min(a, b), y - 30, math.max(a, b), y + 10);
+  }
+
+  Rect badgeRect(Person p) => Rect.fromCenter(center: Offset(outX(p) + sideOf(p) * 15, lineY(p) - 4), width: 32, height: 32);
+
+  @override
+  Person? hit(Offset o) {
+    if (Rect.fromCenter(center: center, width: rootW, height: rootH).inflate(6).contains(o)) return app.root;
+    for (final p in app.people) {
+      if (p.parentId == null || !visible(p)) continue;
+      if (textRect(p).inflate(3).contains(o) || (app.children(p.id).isNotEmpty && badgeRect(p).contains(o))) return p;
+    }
+    return null;
+  }
+
+  @override
+  bool toggleHit(Offset o, Person p) => p.parentId != null && app.children(p.id).isNotEmpty && badgeRect(p).contains(o);
+
+  @override
+  CustomPainter painter(Color fill, Color text, Color dot, {bool dots = true}) => _MindPainter(this, fill, text, dot, dots: dots);
+}
+
+class _MindPainter extends CustomPainter {
+  final MindMapLayout L;
+  final Color fill, text, line;
+  final bool dots;
+  _MindPainter(this.L, this.fill, this.text, this.line, {this.dots = true});
+
+  double _w(int d) => d == 1 ? 7.5 : d == 2 ? 3.2 : 2.4;
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    if (dots) {
+      final pts = <Offset>[];
+      for (double x = -1200; x < s.width + 1200; x += 30) {
+        for (double y = -1200; y < s.height + 1200; y += 30) {
+          pts.add(Offset(x, y));
+        }
+      }
+      canvas.drawPoints(ui.PointMode.points, pts, Paint()..color = line.withAlpha(90)..strokeWidth = 2.6..strokeCap = StrokeCap.round);
+    }
+    final c = L.center;
+    final vis = [for (final p in app.people) if (p.parentId != null && L.visible(p)) p];
+    // المنحنيات والخطوط التحتية
+    for (final p in vis) {
+      final d = L.depthOf(p), sgn = L.sideOf(p).toDouble();
+      final par = app.byId(p.parentId!)!;
+      final start = par.parentId == null ? Offset(c.dx + sgn * MindMapLayout.rootW / 2, c.dy) : Offset(L.outX(par), L.lineY(par));
+      final end = Offset(L.inX(p), L.lineY(p));
+      final dx = (end.dx - start.dx) * .55;
+      final paint = Paint()..color = app.colorOf(p)..style = PaintingStyle.stroke..strokeWidth = _w(d)..strokeCap = StrokeCap.round;
+      canvas.drawPath(Path()..moveTo(start.dx, start.dy)..cubicTo(start.dx + dx, start.dy, end.dx - dx, end.dy, end.dx, end.dy), paint);
+      canvas.drawLine(end, Offset(L.outX(p), L.lineY(p)), paint);
+    }
+    // الأسماء والشارات
+    for (final p in vis) {
+      final d = L.depthOf(p);
+      final tp = _mmText(p.name, d, text);
+      final mid = (L.inX(p) + L.outX(p)) / 2;
+      tp.paint(canvas, Offset(mid - tp.width / 2, L.lineY(p) - tp.height - (d == 1 ? 7 : 4)));
+      final n = app.children(p.id).length;
+      if (n > 0 && !L.all) {
+        final col = app.colorOf(p), open = L.isOpen(p);
+        final b = Offset(L.outX(p) + L.sideOf(p) * 15, L.lineY(p) - 4);
+        canvas.drawCircle(b, 11, Paint()..color = open ? fill : col);
+        canvas.drawCircle(b, 11, Paint()..color = col..style = PaintingStyle.stroke..strokeWidth = 2);
+        final bt = TextPainter(
+          text: TextSpan(text: open ? '−' : '+${ar(n)}', style: TextStyle(color: open ? col : onColor(col), fontSize: open ? 15 : 10, fontWeight: FontWeight.w900)),
+          textDirection: TextDirection.rtl,
+        )..layout();
+        bt.paint(canvas, b - Offset(bt.width / 2, bt.height / 2));
+      }
+    }
+    // الجذر
+    final rr = RRect.fromRectAndRadius(Rect.fromCenter(center: c, width: MindMapLayout.rootW, height: MindMapLayout.rootH), const Radius.circular(24));
+    canvas.drawRRect(rr.shift(const Offset(0, 3)), Paint()..color = Colors.black.withAlpha(34)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+    canvas.drawRRect(rr, Paint()..color = fill);
+    canvas.drawRRect(rr, Paint()..color = app.primary..style = PaintingStyle.stroke..strokeWidth = 3);
+    final rt = TextPainter(
+      text: TextSpan(text: app.root.name, style: TextStyle(color: text, fontSize: 15.5, fontWeight: FontWeight.w900)),
+      textDirection: TextDirection.rtl,
+      maxLines: 1,
+      ellipsis: '…',
+    )..layout(maxWidth: MindMapLayout.rootW - 20);
+    rt.paint(canvas, c - Offset(rt.width / 2, rt.height / 2));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter old) => true;
+}
+
 int fullLeaves(Person p) {
   final k = app.children(p.id);
   return k.isEmpty ? 1 : k.fold<int>(0, (a, c) => a + fullLeaves(c));
@@ -2276,7 +2422,7 @@ class TreeCanvas extends StatefulWidget {
 
 class _TreeCanvasState extends State<TreeCanvas> {
   final tc = TransformationController();
-  int mode = 0; // 0 بطاقات، 1 دائري، 2 جانبين
+  int mode = 0; // 0 بطاقات، 1 دائري، 2 جانبين، 3 متفرع
   Size _vp = Size.zero;
   int _lastSig = 0;
   late Set<String> expanded = _defaultExpanded();
@@ -2285,7 +2431,13 @@ class _TreeCanvasState extends State<TreeCanvas> {
   Set<String> _defaultExpanded() => mode == 0 ? <String>{} : {for (final b in app.children(app.root.id)) b.id};
 
   TreeGeometry _make({bool all = false}) =>
-      mode == 0 ? CardLayout(expanded, all: all) : mode == 1 ? RadialLayout(expanded, all: all) : TreeLayout(expanded, all: all);
+      mode == 0
+          ? CardLayout(expanded, all: all)
+          : mode == 1
+              ? RadialLayout(expanded, all: all)
+              : mode == 2
+                  ? TreeLayout(expanded, all: all)
+                  : MindMapLayout(expanded, all: all);
 
   bool get _allOpen => app.people.where((p) => p.parentId != null && app.children(p.id).isNotEmpty).every((p) => expanded.contains(p.id));
 
@@ -2390,7 +2542,9 @@ class _TreeCanvasState extends State<TreeCanvas> {
         ? CardLayout(const {}, all: true)
         : mode == 1
             ? RadialLayout(const {}, all: true)
-            : TreeLayout(const {}, all: true);
+            : mode == 2
+                ? TreeLayout(const {}, all: true)
+                : MindMapLayout(const {}, all: true);
     const titleH = 96.0;
     final W = math.max(L.size.width, 420.0), H = L.size.height + titleH;
     final pr = (4096 / math.max(W, H)).clamp(.4, 3.0).toDouble();
@@ -2425,7 +2579,7 @@ class _TreeCanvasState extends State<TreeCanvas> {
   Future<void> _pdf(bool share) async {
     toast(context, 'جارٍ تجهيز ملف PDF (قد يستغرق لحظات)…');
     try {
-      final bytes = await buildFamilyPdf();
+      final bytes = mode == 3 ? await _buildPdf() : await buildFamilyPdf();
       if (share) {
         await Printing.sharePdf(bytes: bytes, filename: 'family-tree.pdf');
       } else {
@@ -2524,7 +2678,7 @@ class _TreeCanvasState extends State<TreeCanvas> {
               tooltip: 'شكل العرض',
               onSelected: _setMode,
               itemBuilder: (_) => [
-                for (final e in const [(0, 'بطاقات عمودية'), (1, 'دائري'), (2, 'على الجانبين')])
+                for (final e in const [(0, 'بطاقات عمودية'), (1, 'دائري'), (2, 'على الجانبين'), (3, 'متفرع (خريطة ذهنية)')])
                   CheckedPopupMenuItem(value: e.$1, checked: mode == e.$1, child: Text(e.$2)),
               ],
               child: IgnorePointer(child: _roundBtn(context, Icons.view_quilt_rounded, 'شكل العرض', null)),
