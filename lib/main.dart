@@ -118,6 +118,7 @@ class AppState extends ChangeNotifier {
   final Map<String, Uint8List> _img = {};
   final Map<String, int> _imgLen = {};
   bool started = false;
+  bool splashDone = false;
   int themeMode = 0; // 0 تلقائي، 1 فاتح، 2 داكن
   int accent = 0;
   double textScale = 1.0;
@@ -126,6 +127,10 @@ class AppState extends ChangeNotifier {
   int _n = 0, _e = 0;
   Person? _root;
   String familyName = '';
+  final List<Map<String, dynamic>> slots = []; // الأشجار (نسخ محفوظة)
+  int active = 0; // رقم الشجرة المفتوحة
+  String _tid = 't0';
+  String get activeTid => _tid;
   Person get root => _root!;
   bool get hasTree => _root != null;
   String get treeTitle => familyName.isEmpty ? 'شجرة العائلة' : 'شجرة عائلة $familyName';
@@ -148,8 +153,106 @@ class AppState extends ChangeNotifier {
     _e = 0;
     _root = _add(rootName, null);
     familyName = family;
+    _tid = 't${DateTime.now().millisecondsSinceEpoch}';
+    slots
+      ..clear()
+      ..add(_snapshot());
+    active = 0;
     started = true;
+    splashDone = true;
     tab = 0;
+    notifyListeners();
+  }
+
+  // ───── الأشجار المتعددة (كل شجرة منفصلة تماماً عن الأخرى) ─────
+  Map<String, dynamic> _snapshot() => {
+        'tid': _tid,
+        'familyName': familyName,
+        'people': [for (final p in people) p.toJson()],
+        'events': [for (final e in events) e.toJson()],
+        'n': _n,
+        'e': _e,
+      };
+
+  bool _loadSnapshot(Map<String, dynamic> j) {
+    final ps = [for (final x in (j['people'] as List? ?? [])) Person.fromJson(Map<String, dynamic>.from(x as Map))];
+    if (ps.isEmpty || !ps.any((p) => p.parentId == null)) return false;
+    people
+      ..clear()
+      ..addAll(ps);
+    _root = people.firstWhere((p) => p.parentId == null);
+    familyName = j['familyName'] as String? ?? '';
+    events
+      ..clear()
+      ..addAll([for (final x in (j['events'] as List? ?? [])) Event.fromJson(Map<String, dynamic>.from(x as Map))]);
+    _n = (j['n'] as int?) ?? people.length + 1;
+    _e = (j['e'] as int?) ?? events.length + 1;
+    _tid = j['tid'] as String? ?? 't0';
+    _img.clear();
+    _imgLen.clear();
+    photoImages.clear();
+    return true;
+  }
+
+  void _syncActive() {
+    if (_root == null) return;
+    if (slots.isEmpty) {
+      slots.add(_snapshot());
+      active = 0;
+    } else {
+      slots[math.min(active, slots.length - 1)] = _snapshot();
+    }
+  }
+
+  String treeLabel(int i) {
+    final f = i == active ? familyName : (slots[i]['familyName'] as String? ?? '');
+    return f.isEmpty ? 'شجرة ${ar(i + 1)}' : 'عائلة $f';
+  }
+
+  void switchTree(int i) {
+    if (i == active || i < 0 || i >= slots.length) return;
+    _syncActive();
+    if (!_loadSnapshot(slots[i])) return;
+    active = i;
+    notifyListeners();
+  }
+
+  void addTree(String rootName, String family) {
+    _syncActive();
+    final root = Person('p0', rootName, null);
+    slots.add({
+      'tid': 't${DateTime.now().millisecondsSinceEpoch}',
+      'familyName': family,
+      'people': [root.toJson()],
+      'events': <dynamic>[],
+      'n': 1,
+      'e': 0,
+    });
+    _loadSnapshot(slots.last);
+    active = slots.length - 1;
+    tab = 0;
+    notifyListeners();
+  }
+
+  void renameTree(int i, String family) {
+    if (i == active) {
+      familyName = family;
+    } else {
+      slots[i]['familyName'] = family;
+    }
+    notifyListeners();
+  }
+
+  void deleteTree(int i) {
+    if (slots.length <= 1 || i < 0 || i >= slots.length) return;
+    _syncActive();
+    slots.removeAt(i);
+    if (i == active) {
+      active = math.max(0, i - 1);
+    } else if (i < active) {
+      active--;
+    }
+    _loadSnapshot(slots[active]);
     notifyListeners();
   }
 
@@ -277,7 +380,11 @@ class AppState extends ChangeNotifier {
     _imgLen.clear();
     _root = null;
     familyName = '';
+    slots.clear();
+    active = 0;
+    _tid = 't0';
     started = false;
+    splashDone = false;
     tab = 0;
     _n = 0;
     _e = 0;
@@ -311,35 +418,44 @@ class AppState extends ChangeNotifier {
   }
 
   // ───── الحفظ والاستعادة ─────
-  Map<String, dynamic> toMap() => {
-        'people': [for (final p in people) p.toJson()],
-        'events': [for (final e in events) e.toJson()],
-        'started': started, 'themeMode': themeMode, 'accent': accent,
-        'textScale': textScale, 'userName': userName, 'familyName': familyName, 'n': _n, 'e': _e,
-      };
+  Map<String, dynamic> toMap() {
+    _syncActive();
+    return {
+      'slots': slots,
+      'active': active,
+      'started': started,
+      'themeMode': themeMode,
+      'accent': accent,
+      'textScale': textScale,
+      'userName': userName,
+    };
+  }
 
   bool applyMap(Map<String, dynamic> j) {
-    final ps = [for (final x in (j['people'] as List? ?? [])) Person.fromJson(x as Map<String, dynamic>)];
     themeMode = j['themeMode'] as int? ?? themeMode;
     accent = j['accent'] as int? ?? accent;
     textScale = 1.0;
     userName = j['userName'] as String? ?? userName;
-    if (ps.isEmpty || !ps.any((p) => p.parentId == null)) return false;
-    people..clear()..addAll(ps);
-    _root = people.firstWhere((p) => p.parentId == null);
-    familyName = j['familyName'] as String? ?? '';
-    events
-      ..clear()
-      ..addAll([for (final x in (j['events'] as List? ?? [])) Event.fromJson(x as Map<String, dynamic>)]);
+    final sl = j['slots'] as List?;
+    if (sl != null && sl.isNotEmpty) {
+      final list = [for (final x in sl) Map<String, dynamic>.from(x as Map)];
+      final a = math.max(0, math.min(list.length - 1, (j['active'] as int?) ?? 0));
+      if (!_loadSnapshot(list[a])) return false;
+      slots
+        ..clear()
+        ..addAll(list);
+      active = a;
+      started = j['started'] as bool? ?? started;
+      return true;
+    }
+    // نسخة قديمة بشجرة واحدة
+    final legacy = <String, dynamic>{'people': j['people'], 'events': j['events'], 'familyName': j['familyName'], 'n': j['n'], 'e': j['e']};
+    if (!_loadSnapshot(legacy)) return false;
     started = j['started'] as bool? ?? started;
-    themeMode = j['themeMode'] as int? ?? 0;
-    accent = j['accent'] as int? ?? 0;
-    textScale = 1.0;
-    userName = j['userName'] as String? ?? 'المستخدم';
-    _n = (j['n'] as int?) ?? people.length + 1;
-    _e = (j['e'] as int?) ?? events.length + 1;
-    _img.clear();
-    _imgLen.clear();
+    slots
+      ..clear()
+      ..add(_snapshot());
+    active = 0;
     return true;
   }
 
@@ -872,7 +988,7 @@ class FamilyApp extends StatelessWidget {
             ),
           );
         },
-        home: (app.started && app.hasTree) ? const Shell() : const StartScreen(),
+        home: (app.splashDone && app.hasTree) ? const Shell() : const StartScreen(),
       ),
     );
   }
@@ -886,8 +1002,18 @@ class StartScreen extends StatefulWidget {
   State<StartScreen> createState() => _StartScreenState();
 }
 
+/// شاشة سبلاش: الشعار والاسم وشريط تحميل، ثم تنتقل تلقائياً إلى التطبيق.
 class _StartScreenState extends State<StartScreen> with SingleTickerProviderStateMixin {
-  late final AnimationController ctl = AnimationController(vsync: this, duration: const Duration(seconds: 12))..repeat();
+  late final AnimationController ctl = AnimationController(vsync: this, duration: const Duration(seconds: 6))..repeat();
+  bool needCreate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(Duration(milliseconds: app.hasTree ? 2300 : 1500), () {
+      if (mounted) _next();
+    });
+  }
 
   @override
   void dispose() {
@@ -895,30 +1021,19 @@ class _StartScreenState extends State<StartScreen> with SingleTickerProviderStat
     super.dispose();
   }
 
-  void _go() {
-    HapticFeedback.mediumImpact();
+  void _next() {
     if (app.hasTree) {
-      app.update(() => app.started = true);
+      HapticFeedback.lightImpact();
+      app.update(() {
+        app.splashDone = true;
+        app.started = true;
+      });
     } else {
       _create();
     }
   }
 
   Future<void> _create() async {
-    if (app.hasTree) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (c) => AlertDialog(
-          title: const Text('إنشاء شجرة جديدة؟'),
-          content: const Text('ستُستبدل الشجرة الحالية وتُحذف بياناتها.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('إلغاء')),
-            FilledButton(style: FilledButton.styleFrom(minimumSize: const Size(88, 44)), onPressed: () => Navigator.pop(c, true), child: const Text('متابعة')),
-          ],
-        ),
-      );
-      if (ok != true || !mounted) return;
-    }
     final name = TextEditingController();
     final fam = TextEditingController();
     await showSheet<void>(
@@ -943,6 +1058,7 @@ class _StartScreenState extends State<StartScreen> with SingleTickerProviderStat
         ),
       ]),
     );
+    if (mounted && !app.hasTree) setState(() => needCreate = true);
   }
 
   @override
@@ -963,64 +1079,46 @@ class _StartScreenState extends State<StartScreen> with SingleTickerProviderStat
           Positioned(bottom: 100, left: -120, child: _glow(320, cs.tertiary.withAlpha(34))),
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+              padding: const EdgeInsets.fromLTRB(32, 8, 32, 40),
               child: Column(children: [
-                Expanded(
-                  flex: 5,
-                  child: Center(
-                    child: Reveal(
-                      i: 0,
-                      child: AnimatedBuilder(
-                        animation: ctl,
-                        builder: (_, child) => Transform.translate(offset: Offset(0, math.sin(ctl.value * 2 * math.pi) * 5), child: child),
-                        child: Container(
-                          constraints: const BoxConstraints(maxWidth: 300, maxHeight: 300),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(44),
-                            boxShadow: [BoxShadow(color: Colors.black.withAlpha(34), blurRadius: 34, offset: const Offset(0, 14))],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(44),
-                            child: Image.asset('assets/logo.jpg', fit: BoxFit.contain),
-                          ),
-                        ),
+                const Spacer(flex: 4),
+                TweenAnimationBuilder<double>(
+                  tween: Tween(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 1100),
+                  curve: Curves.easeOutBack,
+                  builder: (_, v, child) => Opacity(opacity: v.clamp(0.0, 1.0), child: Transform.scale(scale: .82 + .18 * v, child: child)),
+                  child: AnimatedBuilder(
+                    animation: ctl,
+                    builder: (_, child) => Transform.translate(offset: Offset(0, math.sin(ctl.value * 2 * math.pi) * 5), child: child),
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 290, maxHeight: 290),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(48),
+                        boxShadow: [BoxShadow(color: Colors.black.withAlpha(36), blurRadius: 40, offset: const Offset(0, 16))],
+                      ),
+                      child: ClipRRect(borderRadius: BorderRadius.circular(48), child: Image.asset('assets/logo.jpg', fit: BoxFit.contain)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 28),
+                Reveal(i: 2, child: const Text('شجرة العائلة', style: TextStyle(fontSize: 36, fontWeight: FontWeight.w900))),
+                const SizedBox(height: 8),
+                Reveal(i: 3, child: Text('عائلتك في مكان واحد', style: TextStyle(fontSize: 16, color: cs.onSurfaceVariant))),
+                const Spacer(flex: 3),
+                if (needCreate)
+                  SizedBox(width: double.infinity, child: FilledButton(onPressed: _create, child: const Text('إنشاء الشجرة')))
+                else
+                  SizedBox(
+                    width: 120,
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0, end: 1),
+                      duration: Duration(milliseconds: app.hasTree ? 2200 : 1400),
+                      builder: (_, v, __) => ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(value: v, minHeight: 4, color: app.primary, backgroundColor: app.primary.withAlpha(36)),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 18),
-                Reveal(i: 1, child: const Text('شجرة العائلة', style: TextStyle(fontSize: 38, fontWeight: FontWeight.w900))),
-                const SizedBox(height: 10),
-                Reveal(
-                  i: 2,
-                  child: Text(
-                    'اجمع أفراد عائلتك وفروعها في مكان واحد، وتعرّف على صلة القرابة بينهم.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 16, height: 1.7, color: cs.onSurfaceVariant),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Reveal(
-                  i: 3,
-                  child: const Wrap(alignment: WrapAlignment.center, spacing: 8, runSpacing: 8, children: [
-                    _FeatureChip(Icons.account_tree_rounded, 'شجرة تفاعلية'),
-                    _FeatureChip(Icons.diversity_3_rounded, 'صلة القرابة'),
-                    _FeatureChip(Icons.lock_outline_rounded, 'بياناتك على جهازك'),
-                  ]),
-                ),
-                const SizedBox(height: 26),
-                Reveal(
-                  i: 4,
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _go,
-                      iconAlignment: IconAlignment.end,
-                      icon: const Icon(Icons.arrow_forward_rounded),
-                      label: Text(app.hasTree ? 'متابعة' : 'ابدأ'),
-                    ),
-                  ),
-                ),
               ]),
             ),
           ),
@@ -1032,30 +1130,6 @@ class _StartScreenState extends State<StartScreen> with SingleTickerProviderStat
   Widget _glow(double d, Color c) => IgnorePointer(
         child: Container(width: d, height: d, decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [c, Colors.transparent]))),
       );
-}
-
-class _FeatureChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  const _FeatureChip(this.icon, this.label);
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final light = Theme.of(context).brightness == Brightness.light;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: light ? Colors.white.withAlpha(200) : cs.surfaceContainerHigh.withAlpha(200),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: cs.outlineVariant.withAlpha(110)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 16, color: cs.primary),
-        const SizedBox(width: 6),
-        Text(label, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
-      ]),
-    );
-  }
 }
 
 // ═════════════════════════ الهيكل ═════════════════════════
@@ -1070,7 +1144,12 @@ class Shell extends StatelessWidget {
       listenable: app,
       builder: (context, _) => Scaffold(
         extendBody: true,
-        body: IndexedStack(index: app.tab, children: const [HomeScreen(), TreeScreen(), SearchScreen(), SettingsScreen()]),
+        body: IndexedStack(index: app.tab, children: [
+          KeyedSubtree(key: ValueKey('${app.activeTid}-0'), child: const HomeScreen()),
+          KeyedSubtree(key: ValueKey('${app.activeTid}-1'), child: const TreeScreen()),
+          KeyedSubtree(key: ValueKey('${app.activeTid}-2'), child: const SearchScreen()),
+          KeyedSubtree(key: ValueKey('${app.activeTid}-3'), child: const SettingsScreen()),
+        ]),
         bottomNavigationBar: SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -1133,6 +1212,8 @@ class HomeScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, kNavPad),
           children: [
+            const _TreeSwitcher(),
+            const SizedBox(height: 14),
             Reveal(i: 0, child: Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(colors: [app.primary, dark], begin: Alignment.topRight, end: Alignment.bottomLeft),
@@ -1270,6 +1351,121 @@ class HomeScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+class _TreeSwitcher extends StatelessWidget {
+  const _TreeSwitcher();
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 46,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          for (var i = 0; i < app.slots.length; i++)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 8),
+              child: GestureDetector(
+                onLongPress: () => treeOptionsSheet(context, i),
+                child: ChoiceChip(
+                  showCheckmark: false,
+                  label: Text(app.treeLabel(i), style: const TextStyle(fontWeight: FontWeight.w800)),
+                  selected: i == app.active,
+                  onSelected: (_) {
+                    HapticFeedback.selectionClick();
+                    if (i == app.active) {
+                      treeOptionsSheet(context, i);
+                    } else {
+                      app.switchTree(i);
+                    }
+                  },
+                ),
+              ),
+            ),
+          if (app.slots.length < 6)
+            ActionChip(
+              avatar: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('شجرة جديدة', style: TextStyle(fontWeight: FontWeight.w800)),
+              onPressed: () => newTreeSheet(context),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> newTreeSheet(BuildContext context) async {
+  final name = TextEditingController();
+  final fam = TextEditingController();
+  await showSheet<void>(
+    context,
+    (c) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Text('شجرة جديدة', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
+      const SizedBox(height: 6),
+      Text('شجرة منفصلة تماماً عن الأشجار الأخرى، لها أفرادها ومناسباتها.', style: TextStyle(color: Theme.of(c).colorScheme.onSurfaceVariant)),
+      const SizedBox(height: 16),
+      TextField(controller: name, autofocus: true, decoration: deco(c, 'اسم جذر الشجرة (مثال: محمد أحمد)')),
+      const SizedBox(height: 12),
+      TextField(controller: fam, decoration: deco(c, 'اسم العائلة (مثال: أحمد)')),
+      const SizedBox(height: 20),
+      FilledButton(
+        onPressed: () {
+          if (name.text.trim().isEmpty) return;
+          final n = name.text.trim(), f = fam.text.trim();
+          Navigator.pop(c);
+          app.addTree(n, f);
+        },
+        child: const Text('إنشاء الشجرة'),
+      ),
+    ]),
+  );
+}
+
+Future<void> treeOptionsSheet(BuildContext context, int i) async {
+  final fam = TextEditingController(text: i == app.active ? app.familyName : (app.slots[i]['familyName'] as String? ?? ''));
+  await showSheet<void>(
+    context,
+    (c) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text(app.treeLabel(i), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
+      const SizedBox(height: 16),
+      TextField(controller: fam, decoration: deco(c, 'اسم العائلة')),
+      const SizedBox(height: 16),
+      FilledButton(
+        onPressed: () {
+          app.renameTree(i, fam.text.trim());
+          Navigator.pop(c);
+        },
+        child: const Text('حفظ الاسم'),
+      ),
+      if (app.slots.length > 1) ...[
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(foregroundColor: Theme.of(c).colorScheme.error),
+          icon: const Icon(Icons.delete_outline_rounded),
+          label: const Text('حذف هذه الشجرة'),
+          onPressed: () async {
+            Navigator.pop(c);
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (d) => AlertDialog(
+                title: Text('حذف ${app.treeLabel(i)}؟'),
+                content: const Text('ستُحذف هذه الشجرة بكل أفرادها ومناسباتها نهائياً، ولا تتأثر الأشجار الأخرى.'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('إلغاء')),
+                  FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: Theme.of(d).colorScheme.error, minimumSize: const Size(88, 44)),
+                    onPressed: () => Navigator.pop(d, true),
+                    child: const Text('حذف'),
+                  ),
+                ],
+              ),
+            );
+            if (ok == true) app.deleteTree(i);
+          },
+        ),
+      ],
+    ]),
+  );
 }
 
 class _Stat extends StatelessWidget {
@@ -3489,8 +3685,8 @@ class SettingsScreen extends StatelessWidget {
             _group(context, [
               _Tile(Icons.cloud_upload_outlined, 'نسخة احتياطية', 'حفظ ملف النسخة في هاتفك', () => _backup(context)),
               _Tile(Icons.cloud_download_outlined, 'استعادة نسخة', 'اختيار ملف النسخة من هاتفك', () => _restore(context)),
-              _Tile(Icons.restart_alt_rounded, 'حذف كل البيانات', 'حذف الشجرة والبدء من جديد', () async {
-                if (await _confirm(context, 'حذف كل البيانات؟', 'ستُحذف الشجرة وكل الأفراد والمناسبات نهائياً.')) app.reset();
+              _Tile(Icons.restart_alt_rounded, 'حذف كل البيانات', 'حذف كل الأشجار والبدء من جديد', () async {
+                if (await _confirm(context, 'حذف كل البيانات؟', 'ستُحذف كل الأشجار وكل الأفراد والمناسبات نهائياً.')) app.reset();
               }),
             ]),
             const SectionTitle('عام'),
@@ -3508,10 +3704,6 @@ class SettingsScreen extends StatelessWidget {
               _Tile(Icons.info_outline_rounded, 'عن التطبيق', 'الإصدار ٢٫٠', () {
                 showAboutDialog(context: context, applicationName: 'شجرة العائلة', applicationVersion: '2.0.0', applicationLegalese: 'بياناتك محفوظة على جهازك');
               }),
-              _Tile(Icons.logout_rounded, 'تسجيل الخروج', null, () => app.update(() {
-                    app.started = false;
-                    app.tab = 0;
-                  }), danger: true),
             ]),
           ],
         ),
