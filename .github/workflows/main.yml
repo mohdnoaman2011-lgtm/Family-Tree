@@ -35,6 +35,10 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
+      # أيقونة التطبيق (الشعار): تتضمن الأيقونة التكيّفية التي تتجاوز أيقونة فلاتر الافتراضية
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
+
       - name: Build release APK
         run: flutter build apk --release
 
